@@ -24,6 +24,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 - Updated dependency constraint to support asimov 0.7
+- `PESummary` now overrides `detect_completion()` instead of falling back to
+  the base `Pipeline`'s unconditional no-op. Without this, once a
+  production's HTCondor job exited and asimov stopped tracking a job id for
+  it, `asimov monitor`'s no-job-id branch could never detect that the run
+  had actually finished -- it repeated "is stuck; attempting a rescue"
+  forever, regardless of how long a genuine, correctly labelled
+  `posterior_samples.h5` had already existed on disk.
 
 ## [0.1.0] - TBD
 
