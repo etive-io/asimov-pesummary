@@ -250,6 +250,7 @@
 <li><a class="reference internal" href="#asimov_pesummary.pesummary.PESummary.config_template"><code class="docutils literal notranslate"><span class="pre">PESummary.config_template</span></code></a></li>
 <li><a class="reference internal" href="#asimov_pesummary.pesummary.PESummary.results"><code class="docutils literal notranslate"><span class="pre">PESummary.results()</span></code></a></li>
 <li><a class="reference internal" href="#asimov_pesummary.pesummary.PESummary.collect_assets"><code class="docutils literal notranslate"><span class="pre">PESummary.collect_assets()</span></code></a></li>
+<li><a class="reference internal" href="#asimov_pesummary.pesummary.PESummary.detect_completion"><code class="docutils literal notranslate"><span class="pre">PESummary.detect_completion()</span></code></a></li>
 <li><a class="reference internal" href="#asimov_pesummary.pesummary.PESummary.build_dag"><code class="docutils literal notranslate"><span class="pre">PESummary.build_dag()</span></code></a></li>
 <li><a class="reference internal" href="#asimov_pesummary.pesummary.PESummary.submit_dag"><code class="docutils literal notranslate"><span class="pre">PESummary.submit_dag()</span></code></a></li>
 </ul>
@@ -337,6 +338,29 @@ makes sense for the output, for example skymaps.</p>
 <span class="sig-name descname"><span class="pre">collect_assets</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="reference internal" href="_modules/asimov_pesummary/pesummary.html#PESummary.collect_assets"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#asimov_pesummary.pesummary.PESummary.collect_assets" title="Link to this definition">¶</a></dt>
 <dd><p>Advertise this pipeline’s combined metafile, in case a further
 downstream step ever needs to consume it.</p>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="asimov_pesummary.pesummary.PESummary.detect_completion">
+<span class="sig-name descname"><span class="pre">detect_completion</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="reference internal" href="_modules/asimov_pesummary/pesummary.html#PESummary.detect_completion"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#asimov_pesummary.pesummary.PESummary.detect_completion" title="Link to this definition">¶</a></dt>
+<dd><p>Detect that this production’s own <code class="docutils literal notranslate"><span class="pre">summarypages</span></code> run has finished.</p>
+<p>The base <code class="docutils literal notranslate"><span class="pre">Pipeline.detect_completion()</span></code> is an unconditional no-op
+(always falsy). Once this production’s HTCondor job has exited and
+asimov’s monitor loop is no longer tracking a job id for it,
+<code class="docutils literal notranslate"><span class="pre">asimov</span> <span class="pre">monitor</span></code>’s no-job-id branch
+(<code class="docutils literal notranslate"><span class="pre">_handle_no_condor_job</span></code> in asimov’s <code class="docutils literal notranslate"><span class="pre">monitor_states.py</span></code>) relies
+entirely on this method to decide whether to mark the production
+<code class="docutils literal notranslate"><span class="pre">finished</span></code>; without an override here it always finds this falsy
+and repeatedly logs “is stuck; attempting a rescue” – forever,
+since the base <code class="docutils literal notranslate"><span class="pre">resurrect()</span></code> is an equally unconditional no-op
+that never raises, so the production never progresses no matter how
+long or how often it’s polled, even once a genuine, correctly
+labelled <code class="docutils literal notranslate"><span class="pre">posterior_samples.h5</span></code> already exists on disk.</p>
+<p>Delegates to <code class="docutils literal notranslate"><span class="pre">detect_completion_processing()</span></code>, which already
+implements the right check for this pipeline’s own output: that
+<code class="docutils literal notranslate"><span class="pre">posterior_samples.h5</span></code> exists, is readable, and (for a
+<code class="docutils literal notranslate"><span class="pre">SubjectAnalysis</span></code>) contains every expected analysis’s label as a
+top-level group.</p>
 </dd></dl>
 
 <dl class="py method">

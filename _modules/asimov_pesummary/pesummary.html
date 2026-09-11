@@ -396,6 +396,34 @@
         <span class="k">return</span> <span class="p">{</span><span class="s2">"samples"</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">results</span><span class="p">()[</span><span class="s2">"metafile"</span><span class="p">]}</span></div>
 
 
+<div class="viewcode-block" id="PESummary.detect_completion">
+<a class="viewcode-back" href="../../api.html#asimov_pesummary.pesummary.PESummary.detect_completion">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">detect_completion</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">"""</span>
+<span class="sd">        Detect that this production's own ``summarypages`` run has finished.</span>
+
+<span class="sd">        The base ``Pipeline.detect_completion()`` is an unconditional no-op</span>
+<span class="sd">        (always falsy). Once this production's HTCondor job has exited and</span>
+<span class="sd">        asimov's monitor loop is no longer tracking a job id for it,</span>
+<span class="sd">        ``asimov monitor``'s no-job-id branch</span>
+<span class="sd">        (``_handle_no_condor_job`` in asimov's ``monitor_states.py``) relies</span>
+<span class="sd">        entirely on this method to decide whether to mark the production</span>
+<span class="sd">        ``finished``; without an override here it always finds this falsy</span>
+<span class="sd">        and repeatedly logs "is stuck; attempting a rescue" -- forever,</span>
+<span class="sd">        since the base ``resurrect()`` is an equally unconditional no-op</span>
+<span class="sd">        that never raises, so the production never progresses no matter how</span>
+<span class="sd">        long or how often it's polled, even once a genuine, correctly</span>
+<span class="sd">        labelled ``posterior_samples.h5`` already exists on disk.</span>
+
+<span class="sd">        Delegates to ``detect_completion_processing()``, which already</span>
+<span class="sd">        implements the right check for this pipeline's own output: that</span>
+<span class="sd">        ``posterior_samples.h5`` exists, is readable, and (for a</span>
+<span class="sd">        ``SubjectAnalysis``) contains every expected analysis's label as a</span>
+<span class="sd">        top-level group.</span>
+<span class="sd">        """</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">detect_completion_processing</span><span class="p">()</span></div>
+
+
 <div class="viewcode-block" id="PESummary.build_dag">
 <a class="viewcode-back" href="../../api.html#asimov_pesummary.pesummary.PESummary.build_dag">[docs]</a>
     <span class="k">def</span><span class="w"> </span><span class="nf">build_dag</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">user</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">dryrun</span><span class="o">=</span><span class="kc">False</span><span class="p">):</span>
