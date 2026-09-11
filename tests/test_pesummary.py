@@ -289,6 +289,51 @@ class TestPESummaryResults(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# TestPESummaryDetectCompletion
+# ---------------------------------------------------------------------------
+
+class TestPESummaryDetectCompletion(unittest.TestCase):
+    """Regression tests for detect_completion().
+
+    The base Pipeline.detect_completion() is an unconditional no-op, so
+    without an override here, asimov monitor's no-job-id branch
+    (_handle_no_condor_job) can never detect that a PESummary production's
+    own job has finished once its HTCondor job id is no longer tracked --
+    it just logs "is stuck; attempting a rescue" forever, regardless of how
+    long the actual, correct posterior_samples.h5 has already existed on
+    disk. This was confirmed directly in a real end-to-end run: the file
+    was written and independently verified readable several seconds before
+    the very first "stuck; attempting a rescue" log line.
+    """
+
+    def setUp(self):
+        self.production = make_production()
+        self.pipeline = PESummary(self.production)
+
+    def test_delegates_to_detect_completion_processing_when_true(self):
+        with patch.object(
+            self.pipeline, "detect_completion_processing", return_value=True
+        ):
+            self.assertTrue(self.pipeline.detect_completion())
+
+    def test_delegates_to_detect_completion_processing_when_false(self):
+        with patch.object(
+            self.pipeline, "detect_completion_processing", return_value=False
+        ):
+            self.assertFalse(self.pipeline.detect_completion())
+
+    def test_is_not_the_base_no_op(self):
+        """The base Pipeline.detect_completion() is `pass`, i.e. always
+        `None` (falsy) -- assert this class actually overrides it, rather
+        than merely happening to return a falsy value for other reasons."""
+        from asimov.pipeline import Pipeline
+
+        self.assertIsNot(
+            PESummary.detect_completion, Pipeline.detect_completion
+        )
+
+
+# ---------------------------------------------------------------------------
 # TestPESummarySubmitDagCommand
 #
 # All tests in this class run submit_dag(dryrun=True) and inspect the command

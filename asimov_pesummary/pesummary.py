@@ -127,6 +127,31 @@ class PESummary(Pipeline):
         """
         return {"samples": self.results()["metafile"]}
 
+    def detect_completion(self):
+        """
+        Detect that this production's own ``summarypages`` run has finished.
+
+        The base ``Pipeline.detect_completion()`` is an unconditional no-op
+        (always falsy). Once this production's HTCondor job has exited and
+        asimov's monitor loop is no longer tracking a job id for it,
+        ``asimov monitor``'s no-job-id branch
+        (``_handle_no_condor_job`` in asimov's ``monitor_states.py``) relies
+        entirely on this method to decide whether to mark the production
+        ``finished``; without an override here it always finds this falsy
+        and repeatedly logs "is stuck; attempting a rescue" -- forever,
+        since the base ``resurrect()`` is an equally unconditional no-op
+        that never raises, so the production never progresses no matter how
+        long or how often it's polled, even once a genuine, correctly
+        labelled ``posterior_samples.h5`` already exists on disk.
+
+        Delegates to ``detect_completion_processing()``, which already
+        implements the right check for this pipeline's own output: that
+        ``posterior_samples.h5`` exists, is readable, and (for a
+        ``SubjectAnalysis``) contains every expected analysis's label as a
+        top-level group.
+        """
+        return self.detect_completion_processing()
+
     def build_dag(self, user=None, dryrun=False):
         """
         No-op: PESummary has no separate build step. All of the work
