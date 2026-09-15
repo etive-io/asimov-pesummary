@@ -276,24 +276,36 @@ class PESummary(Pipeline):
         )[0]
         label = str(self.production.name)
 
+        waveform = self.production.meta.get("waveform", {})
+        if not {"approximant", "reference frequency"} <= waveform.keys():
+            raise PipelineException(
+                f"PESummary production {self.production.name} is missing "
+                "waveform configuration (approximant / reference frequency) "
+                "required to post-process it."
+            )
+        likelihood = self.production.meta.get("likelihood", {})
+        if "minimum frequency" not in likelihood:
+            raise PipelineException(
+                f"PESummary production {self.production.name} is missing "
+                "likelihood configuration (minimum frequency) required to "
+                "post-process it."
+            )
+
         command = ["--webdir", self._webdir(), "--labels", label]
 
         command += ["--gw"]
-        command += [
-            "--approximant",
-            self.production.meta["waveform"]["approximant"],
-        ]
+        command += ["--approximant", waveform["approximant"]]
 
         command += [
             "--f_low",
-            str(min(self.production.meta["waveform"]["minimum frequency"].values())),
+            str(min(likelihood["minimum frequency"].values())),
             "--f_ref",
-            str(self.production.meta["waveform"]["reference frequency"]),
+            str(waveform["reference frequency"]),
         ]
 
         self._append_shared_options(command)
 
-        if "nrsur" in self.production.meta["waveform"]["approximant"].lower():
+        if "nrsur" in waveform["approximant"].lower():
             command += ["--NRSur_fits"]
 
         # Config file
@@ -390,20 +402,25 @@ class PESummary(Pipeline):
                 continue
 
             waveform = analysis.meta.get("waveform", {})
-            if not {"approximant", "minimum frequency", "reference frequency"} <= (
-                waveform.keys()
-            ):
+            likelihood = analysis.meta.get("likelihood", {})
+            if not {"approximant", "reference frequency"} <= waveform.keys():
                 raise PipelineException(
                     f"PESummary subject analysis {self.production.name}: "
                     f"{analysis.name} is missing waveform configuration "
-                    "(approximant / minimum frequency / reference frequency) "
-                    "required to combine it."
+                    "(approximant / reference frequency) required to "
+                    "combine it."
+                )
+            if "minimum frequency" not in likelihood:
+                raise PipelineException(
+                    f"PESummary subject analysis {self.production.name}: "
+                    f"{analysis.name} is missing likelihood configuration "
+                    "(minimum frequency) required to combine it."
                 )
 
             labels.append(analysis.name)
             samples_list.append(samples)
             approximants.append(waveform["approximant"])
-            f_lows.append(str(min(waveform["minimum frequency"].values())))
+            f_lows.append(str(min(likelihood["minimum frequency"].values())))
             f_refs.append(str(waveform["reference frequency"]))
 
             configfile = analysis.event.repository.find_prods(

@@ -59,7 +59,7 @@ def make_production(pesummary_meta=None, approximant="IMRPhenomXPHM",
     approximant : str
         Waveform approximant name.
     min_freq : dict, optional
-        ``{ifo: Hz}`` mapping for ``waveform.minimum frequency``.
+        ``{ifo: Hz}`` mapping for ``likelihood.minimum frequency``.
         Defaults to ``{"H1": 20, "L1": 20, "V1": 20}``.
     assets : dict, optional
         Overrides for the dict returned by ``_previous_assets()``.
@@ -83,6 +83,8 @@ def make_production(pesummary_meta=None, approximant="IMRPhenomXPHM",
         "waveform": {
             "approximant": approximant,
             "reference frequency": 20,
+        },
+        "likelihood": {
             "minimum frequency": min_freq or {"H1": 20, "L1": 20, "V1": 20},
         },
         "postprocessing": {
@@ -121,6 +123,8 @@ def make_dependency(name, approximant="IMRPhenomXPHM", min_freq=None,
         "waveform": {
             "approximant": approximant,
             "reference frequency": reference_frequency,
+        },
+        "likelihood": {
             "minimum frequency": min_freq or {"H1": 20, "L1": 20},
         },
     }
@@ -446,6 +450,30 @@ class TestPESummarySubmitDagCommand(unittest.TestCase):
 
     def test_no_samples_raises_pipeline_exception(self):
         production = make_production(assets={"samples": None})
+        with self.assertRaises(PipelineException):
+            self._run(production)
+
+    def test_missing_waveform_meta_raises_pipeline_exception(self):
+        production = make_production()
+        del production.meta["waveform"]["approximant"]
+        with self.assertRaises(PipelineException):
+            self._run(production)
+
+    def test_missing_waveform_meta_entirely_raises_pipeline_exception(self):
+        production = make_production()
+        del production.meta["waveform"]
+        with self.assertRaises(PipelineException):
+            self._run(production)
+
+    def test_missing_likelihood_meta_raises_pipeline_exception(self):
+        production = make_production()
+        del production.meta["likelihood"]["minimum frequency"]
+        with self.assertRaises(PipelineException):
+            self._run(production)
+
+    def test_missing_likelihood_meta_entirely_raises_pipeline_exception(self):
+        production = make_production()
+        del production.meta["likelihood"]
         with self.assertRaises(PipelineException):
             self._run(production)
 
@@ -841,6 +869,15 @@ class TestPESummarySubjectAnalysis(unittest.TestCase):
             pipeline.submit_dag(dryrun=True)
         self.assertIn("BadRun", str(ctx.exception))
 
+    def test_missing_likelihood_config_raises(self):
+        bad = make_dependency("BadRun")
+        del bad.meta["likelihood"]["minimum frequency"]
+        production = make_subject_analysis(analyses=[bad])
+        pipeline = PESummary(production)
+        with self.assertRaises(PipelineException) as ctx:
+            pipeline.submit_dag(dryrun=True)
+        self.assertIn("BadRun", str(ctx.exception))
+
     def test_dependency_with_no_samples_is_skipped(self):
         no_samples = make_dependency("Empty")
         no_samples.pipeline.collect_assets.return_value["samples"] = None
@@ -902,6 +939,27 @@ class TestPESummarySubjectAnalysis(unittest.TestCase):
         production = make_subject_analysis()
         self._parts(production)
         self.assertEqual(production.resolved_dependencies, ["Bilby1", "Bilby2"])
+
+    def test_full_combine_uses_per_analysis_minimum_and_reference_frequency(self):
+        """Guards against a regression back to reading `waveform.minimum
+        frequency` (which asimov never populates): use distinct
+        `likelihood.minimum frequency` / `waveform.reference frequency`
+        values per dependency and check `--f_low`/`--f_ref` carry the
+        right value for each label."""
+        dep1 = make_dependency(
+            "Bilby1", min_freq={"H1": 16, "L1": 20}, reference_frequency=20
+        )
+        dep2 = make_dependency(
+            "Bilby2", min_freq={"H1": 32, "L1": 40}, reference_frequency=50
+        )
+        parts = self._parts(make_subject_analysis(analyses=[dep1, dep2]))
+
+        labels = self._values_after("--labels", 2, parts)
+        f_lows = self._values_after("--f_low", 2, parts)
+        f_refs = self._values_after("--f_ref", 2, parts)
+
+        self.assertEqual(dict(zip(labels, f_lows)), {"Bilby1": "16", "Bilby2": "32"})
+        self.assertEqual(dict(zip(labels, f_refs)), {"Bilby1": "20", "Bilby2": "50"})
 
     # --- Incremental refresh (add_to_existing) ---
 

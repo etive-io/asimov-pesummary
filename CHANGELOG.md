@@ -31,6 +31,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   had actually finished -- it repeated "is stuck; attempting a rescue"
   forever, regardless of how long a genuine, correctly labelled
   `posterior_samples.h5` had already existed on disk.
+- `_submit_single_analysis` now raises a clear `PipelineException` when a
+  production's `waveform`/`likelihood` meta is missing `approximant`,
+  `reference frequency`, or `minimum frequency`, instead of letting an
+  unguarded dict lookup raise a raw `KeyError` from deep inside
+  `submit_dag`. This matches the validation `_submit_subject_analysis`
+  already performed for each combined analysis.
+- `--f_low` is now read from `production.meta["likelihood"]["minimum
+  frequency"]` instead of `production.meta["waveform"]["minimum
+  frequency"]`, in both `_submit_single_analysis` and
+  `_submit_subject_analysis`. `approximant`/`reference frequency` are
+  waveform properties, but the minimum (starting) frequency is a
+  `likelihood` setting in asimov 0.7's schema: `Analysis.__init__`
+  auto-migrates a legacy `quality.minimum frequency` into
+  `likelihood.minimum frequency` (with a deprecation warning), and
+  asimov's own in-tree `SimpleTestPipeline` reads it from `likelihood`
+  as the reference example for real pipelines. `waveform.minimum
+  frequency` was never populated by asimov at all, so this key was
+  effectively always missing unless a ledger happened to duplicate it
+  there by hand.
 
 ## [0.1.0] - TBD
 
