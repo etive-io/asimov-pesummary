@@ -940,6 +940,27 @@ class TestPESummarySubjectAnalysis(unittest.TestCase):
         self._parts(production)
         self.assertEqual(production.resolved_dependencies, ["Bilby1", "Bilby2"])
 
+    def test_full_combine_uses_per_analysis_minimum_and_reference_frequency(self):
+        """Guards against a regression back to reading `waveform.minimum
+        frequency` (which asimov never populates): use distinct
+        `likelihood.minimum frequency` / `waveform.reference frequency`
+        values per dependency and check `--f_low`/`--f_ref` carry the
+        right value for each label."""
+        dep1 = make_dependency(
+            "Bilby1", min_freq={"H1": 16, "L1": 20}, reference_frequency=20
+        )
+        dep2 = make_dependency(
+            "Bilby2", min_freq={"H1": 32, "L1": 40}, reference_frequency=50
+        )
+        parts = self._parts(make_subject_analysis(analyses=[dep1, dep2]))
+
+        labels = self._values_after("--labels", 2, parts)
+        f_lows = self._values_after("--f_low", 2, parts)
+        f_refs = self._values_after("--f_ref", 2, parts)
+
+        self.assertEqual(dict(zip(labels, f_lows)), {"Bilby1": "16", "Bilby2": "32"})
+        self.assertEqual(dict(zip(labels, f_refs)), {"Bilby1": "20", "Bilby2": "50"})
+
     # --- Incremental refresh (add_to_existing) ---
 
     def test_incremental_refresh_only_includes_new_label(self):
