@@ -4,9 +4,9 @@
 # integration quickly in CI. It is not a realistic PE configuration.
 #
 # Note: `waveform.approximant/reference frequency` and
-# `quality.minimum frequency` are set directly on each production blueprint
-# rather than here, since asimov does not merge project-level `waveform`/
-# `quality` config down into per-production meta.
+# `likelihood.minimum frequency` are set directly on each production
+# blueprint rather than here, since asimov does not merge project-level
+# `waveform`/`likelihood` config down into per-production meta.
 kind: configuration
 
 postprocessing:

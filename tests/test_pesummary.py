@@ -59,7 +59,7 @@ def make_production(pesummary_meta=None, approximant="IMRPhenomXPHM",
     approximant : str
         Waveform approximant name.
     min_freq : dict, optional
-        ``{ifo: Hz}`` mapping for ``quality.minimum frequency``.
+        ``{ifo: Hz}`` mapping for ``likelihood.minimum frequency``.
         Defaults to ``{"H1": 20, "L1": 20, "V1": 20}``.
     assets : dict, optional
         Overrides for the dict returned by ``_previous_assets()``.
@@ -84,7 +84,7 @@ def make_production(pesummary_meta=None, approximant="IMRPhenomXPHM",
             "approximant": approximant,
             "reference frequency": 20,
         },
-        "quality": {
+        "likelihood": {
             "minimum frequency": min_freq or {"H1": 20, "L1": 20, "V1": 20},
         },
         "postprocessing": {
@@ -124,7 +124,7 @@ def make_dependency(name, approximant="IMRPhenomXPHM", min_freq=None,
             "approximant": approximant,
             "reference frequency": reference_frequency,
         },
-        "quality": {
+        "likelihood": {
             "minimum frequency": min_freq or {"H1": 20, "L1": 20},
         },
     }
@@ -465,15 +465,15 @@ class TestPESummarySubmitDagCommand(unittest.TestCase):
         with self.assertRaises(PipelineException):
             self._run(production)
 
-    def test_missing_quality_meta_raises_pipeline_exception(self):
+    def test_missing_likelihood_meta_raises_pipeline_exception(self):
         production = make_production()
-        del production.meta["quality"]["minimum frequency"]
+        del production.meta["likelihood"]["minimum frequency"]
         with self.assertRaises(PipelineException):
             self._run(production)
 
-    def test_missing_quality_meta_entirely_raises_pipeline_exception(self):
+    def test_missing_likelihood_meta_entirely_raises_pipeline_exception(self):
         production = make_production()
-        del production.meta["quality"]
+        del production.meta["likelihood"]
         with self.assertRaises(PipelineException):
             self._run(production)
 
@@ -869,9 +869,9 @@ class TestPESummarySubjectAnalysis(unittest.TestCase):
             pipeline.submit_dag(dryrun=True)
         self.assertIn("BadRun", str(ctx.exception))
 
-    def test_missing_quality_config_raises(self):
+    def test_missing_likelihood_config_raises(self):
         bad = make_dependency("BadRun")
-        del bad.meta["quality"]["minimum frequency"]
+        del bad.meta["likelihood"]["minimum frequency"]
         production = make_subject_analysis(analyses=[bad])
         pipeline = PESummary(production)
         with self.assertRaises(PipelineException) as ctx:

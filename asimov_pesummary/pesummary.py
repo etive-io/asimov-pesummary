@@ -283,11 +283,11 @@ class PESummary(Pipeline):
                 "waveform configuration (approximant / reference frequency) "
                 "required to post-process it."
             )
-        quality = self.production.meta.get("quality", {})
-        if "minimum frequency" not in quality:
+        likelihood = self.production.meta.get("likelihood", {})
+        if "minimum frequency" not in likelihood:
             raise PipelineException(
                 f"PESummary production {self.production.name} is missing "
-                "quality configuration (minimum frequency) required to "
+                "likelihood configuration (minimum frequency) required to "
                 "post-process it."
             )
 
@@ -298,7 +298,7 @@ class PESummary(Pipeline):
 
         command += [
             "--f_low",
-            str(min(quality["minimum frequency"].values())),
+            str(min(likelihood["minimum frequency"].values())),
             "--f_ref",
             str(waveform["reference frequency"]),
         ]
@@ -402,7 +402,7 @@ class PESummary(Pipeline):
                 continue
 
             waveform = analysis.meta.get("waveform", {})
-            quality = analysis.meta.get("quality", {})
+            likelihood = analysis.meta.get("likelihood", {})
             if not {"approximant", "reference frequency"} <= waveform.keys():
                 raise PipelineException(
                     f"PESummary subject analysis {self.production.name}: "
@@ -410,17 +410,17 @@ class PESummary(Pipeline):
                     "(approximant / reference frequency) required to "
                     "combine it."
                 )
-            if "minimum frequency" not in quality:
+            if "minimum frequency" not in likelihood:
                 raise PipelineException(
                     f"PESummary subject analysis {self.production.name}: "
-                    f"{analysis.name} is missing quality configuration "
+                    f"{analysis.name} is missing likelihood configuration "
                     "(minimum frequency) required to combine it."
                 )
 
             labels.append(analysis.name)
             samples_list.append(samples)
             approximants.append(waveform["approximant"])
-            f_lows.append(str(min(quality["minimum frequency"].values())))
+            f_lows.append(str(min(likelihood["minimum frequency"].values())))
             f_refs.append(str(waveform["reference frequency"]))
 
             configfile = analysis.event.repository.find_prods(

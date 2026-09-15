@@ -37,17 +37,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   unguarded dict lookup raise a raw `KeyError` from deep inside
   `submit_dag`. This matches the validation `_submit_subject_analysis`
   already performed for each combined analysis.
-- `--f_low` is now read from `production.meta["quality"]["minimum
+- `--f_low` is now read from `production.meta["likelihood"]["minimum
   frequency"]` instead of `production.meta["waveform"]["minimum
   frequency"]`, in both `_submit_single_analysis` and
   `_submit_subject_analysis`. `approximant`/`reference frequency` are
   waveform properties, but the minimum (starting) frequency is a
-  `quality` setting in asimov's schema -- the same place every other
-  asimov pipeline (bilby, lalinference, rift, bayeswave, and asimov
-  core's own previous built-in `pesummary` pipeline) reads it from.
-  `waveform.minimum frequency` was never populated by any of those, so
-  this key was effectively always missing unless a ledger happened to
-  duplicate it there by hand.
+  `likelihood` setting in asimov 0.7's schema: `Analysis.__init__`
+  auto-migrates a legacy `quality.minimum frequency` into
+  `likelihood.minimum frequency` (with a deprecation warning), and
+  asimov's own in-tree `SimpleTestPipeline` reads it from `likelihood`
+  as the reference example for real pipelines. `waveform.minimum
+  frequency` was never populated by asimov at all, so this key was
+  effectively always missing unless a ledger happened to duplicate it
+  there by hand.
 
 ## [0.1.0] - TBD
 
