@@ -81,10 +81,9 @@ finished, or because a review decision changed which productions match the
 ``analyses``/``refreshable`` selector syntax and staleness detection; this
 plugin only implements what happens when such a resubmission occurs.
 
-The **first** time a ``SubjectAnalysis`` PESummary production runs (or if a
-previously-included analysis has dropped out of the resolved set, for
-example after a review decision), it submits a single ``summarypages`` run
-combining every currently resolved source analysis.
+The **first** time a ``SubjectAnalysis`` PESummary production runs, it
+submits a single ``summarypages`` run combining every currently resolved
+source analysis.
 
 On a **later refresh that only adds** newly-resolved analyses to an
 already-published page, only the new analyses are submitted, using
@@ -92,12 +91,28 @@ already-published page, only the new analyses are submitted, using
 append them to the existing pages in place, rather than reprocessing every
 source analysis again from scratch.
 
+On a **later refresh that only removes** analyses (for example after a
+review decision drops a production from the ``analyses`` selector, with
+nothing new added), ``summarypages`` has no way to retract a label from an
+already-published page in place -- but recombining every remaining analysis
+from scratch would also be wasteful, since none of their posteriors have
+changed. Instead, ``summarymodify --remove_label`` strips the removed
+analyses out of the existing metafile directly, and ``summarypages`` is
+re-run against that trimmed metafile to regenerate the pages, without
+reprocessing the analyses that remain.
+
+Anything else -- a refresh that both adds and removes analyses at once, or
+a previously-published page that's gone missing on disk -- falls back to a
+full rebuild, recombining every currently resolved analysis from scratch.
+
 .. note::
 
-   ``summarypages`` has no way to retract a label from an already-published
-   page. If a previously-included analysis is later *removed* from the
-   resolved set, the next refresh falls back to a full rebuild (recombining
-   every currently resolved analysis) instead of an incremental update.
+   Renaming a stored analysis (for example after a production is renamed in
+   the ledger) is not handled automatically, since a before/after diff of
+   resolved dependency names alone can't distinguish a rename from an
+   unrelated removal and addition. Call ``PESummary.rename_analysis()``
+   directly to rename a label in the published metafile in place via
+   ``summarymodify``, without triggering a re-run.
 
 .. toctree::
    :maxdepth: 2

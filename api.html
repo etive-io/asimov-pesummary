@@ -253,6 +253,7 @@
 <li><a class="reference internal" href="#asimov_pesummary.pesummary.PESummary.detect_completion"><code class="docutils literal notranslate"><span class="pre">PESummary.detect_completion()</span></code></a></li>
 <li><a class="reference internal" href="#asimov_pesummary.pesummary.PESummary.build_dag"><code class="docutils literal notranslate"><span class="pre">PESummary.build_dag()</span></code></a></li>
 <li><a class="reference internal" href="#asimov_pesummary.pesummary.PESummary.submit_dag"><code class="docutils literal notranslate"><span class="pre">PESummary.submit_dag()</span></code></a></li>
+<li><a class="reference internal" href="#asimov_pesummary.pesummary.PESummary.rename_analysis"><code class="docutils literal notranslate"><span class="pre">PESummary.rename_analysis()</span></code></a></li>
 </ul>
 </li>
 </ul>
@@ -283,13 +284,30 @@
 <code class="docutils literal notranslate"><span class="pre">SubjectAnalysis</span></code> (combining several productions’ samples into one set
 of summary pages). <code class="docutils literal notranslate"><span class="pre">SubjectAnalysis</span></code> productions marked <code class="docutils literal notranslate"><span class="pre">refreshable:</span>
 <span class="pre">true</span></code> are automatically resubmitted by asimov’s monitor loop whenever
-their resolved source analyses change; when that happens here, only the
-newly-added analyses are passed to <code class="docutils literal notranslate"><span class="pre">summarypages</span></code>, using its own
-<code class="docutils literal notranslate"><span class="pre">--add_to_existing</span></code>/<code class="docutils literal notranslate"><span class="pre">--existing_webdir</span></code> flags to append them to the
-already-published pages rather than recombining everything from
-scratch. If an analysis is ever removed from the combined set,
-<code class="docutils literal notranslate"><span class="pre">summarypages</span></code> cannot retract a label from an existing page in place,
-so a full rebuild is triggered instead.</p>
+their resolved source analyses change; when that happens here, one of
+three things is submitted depending on how the resolved set changed
+since the last run:</p>
+<ul class="simple">
+<li><p>analyses added only: the newly-added analyses are passed to
+<code class="docutils literal notranslate"><span class="pre">summarypages</span></code>, using its own <code class="docutils literal notranslate"><span class="pre">--add_to_existing</span></code>/
+<code class="docutils literal notranslate"><span class="pre">--existing_webdir</span></code> flags to append them to the already-published
+pages rather than recombining everything from scratch;</p></li>
+<li><p>analyses removed only (nothing added): <code class="docutils literal notranslate"><span class="pre">summarypages</span></code> has no way to
+retract a label from an existing page in place, so instead
+<code class="docutils literal notranslate"><span class="pre">summarymodify</span> <span class="pre">--remove_label</span></code> strips the removed analyses out of
+the existing metafile directly, and <code class="docutils literal notranslate"><span class="pre">summarypages</span></code> is re-run
+against that trimmed metafile to regenerate the pages – cheap, since
+none of the surviving analyses’ posteriors need recomputing;</p></li>
+<li><p>anything else (a mix of additions and removals, the first run, or a
+previous page that’s gone missing on disk): a full rebuild is
+triggered, recombining every currently-resolved analysis from
+scratch.</p></li>
+</ul>
+<p><code class="docutils literal notranslate"><span class="pre">rename_analysis()</span></code> exposes a related <code class="docutils literal notranslate"><span class="pre">summarymodify</span></code> operation
+(renaming a stored label) directly, for callers to invoke explicitly –
+it isn’t wired into the automatic refresh above, since a before/after
+diff of resolved dependency names alone can’t distinguish “renamed”
+from “removed one, added an unrelated one”.</p>
 <dl class="py property">
 <dt class="sig sig-object py" id="asimov_pesummary.pesummary.PESummary.config_template">
 <span class="property"><span class="k"><span class="pre">property</span></span><span class="w"> </span></span><span class="sig-name descname"><span class="pre">config_template</span></span><a class="headerlink" href="#asimov_pesummary.pesummary.PESummary.config_template" title="Link to this definition">¶</a></dt>
@@ -361,6 +379,19 @@ implements the right check for this pipeline’s own output: that
 <code class="docutils literal notranslate"><span class="pre">posterior_samples.h5</span></code> exists, is readable, and (for a
 <code class="docutils literal notranslate"><span class="pre">SubjectAnalysis</span></code>) contains every expected analysis’s label as a
 top-level group.</p>
+<p>That check alone is unsound while a removal or rename (see
+<code class="docutils literal notranslate"><span class="pre">_submit_subject_analysis_removal</span></code>/<code class="docutils literal notranslate"><span class="pre">rename_analysis</span></code>) is
+in-flight: it only checks that <em>expected</em> labels are present, never
+that anything unexpected is absent, so an untouched metafile from
+<em>before</em> a removal already satisfies “surviving labels present” –
+it would look complete before the <code class="docutils literal notranslate"><span class="pre">summarymodify</span></code>/<code class="docutils literal notranslate"><span class="pre">summarypages</span></code>
+chain has even run, let alone finished. So when a chained operation
+is pending (tracked via the <code class="docutils literal notranslate"><span class="pre">pesummary_pending_chain_labels</span></code> meta
+key), this first requires the chain’s own completion marker to
+exist – proof every step of that script actually ran, not just the
+first – before finalising <code class="docutils literal notranslate"><span class="pre">resolved_dependencies</span></code> to what the
+chain was renaming/removing towards and falling through to the
+normal check above.</p>
 </dd></dl>
 
 <dl class="py method">
@@ -376,6 +407,33 @@ before <code class="docutils literal notranslate"><span class="pre">submit_dag</
 <dt class="sig sig-object py" id="asimov_pesummary.pesummary.PESummary.submit_dag">
 <span class="sig-name descname"><span class="pre">submit_dag</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">dryrun</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/asimov_pesummary/pesummary.html#PESummary.submit_dag"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#asimov_pesummary.pesummary.PESummary.submit_dag" title="Link to this definition">¶</a></dt>
 <dd><p>Run PESummary on the results of this job.</p>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="asimov_pesummary.pesummary.PESummary.rename_analysis">
+<span class="sig-name descname"><span class="pre">rename_analysis</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">old_label</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">new_label</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">dryrun</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/asimov_pesummary/pesummary.html#PESummary.rename_analysis"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#asimov_pesummary.pesummary.PESummary.rename_analysis" title="Link to this definition">¶</a></dt>
+<dd><p>Rename a stored analysis in this subject analysis’s published
+metafile, without re-running or recombining anything.</p>
+<p>This is not wired into the automatic refresh cycle: given only a
+before/after diff of resolved dependency names, asimov can’t tell
+“an analysis was renamed” apart from “one was removed and an
+unrelated one was added”. Call this directly – e.g. from a
+one-off script – when a production has been renamed in the
+ledger and its already-computed results should carry over under
+the new name rather than triggering a full re-run.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><dl class="simple">
+<dt><strong>old_label</strong><span class="classifier">str</span></dt><dd><p>The analysis’s current stored label.</p>
+</dd>
+<dt><strong>new_label</strong><span class="classifier">str</span></dt><dd><p>The label to rename it to.</p>
+</dd>
+<dt><strong>dryrun</strong><span class="classifier">bool, optional</span></dt><dd><p>If True, print the commands that would be run rather than
+submitting them.</p>
+</dd>
+</dl>
+</dd>
+</dl>
 </dd></dl>
 
 </dd></dl>

@@ -340,21 +340,34 @@ finished, or because a review decision changed which productions match the
 <code class="docutils literal notranslate"><span class="pre">analyses</span></code> selector. See Asimov’s own documentation for the
 <code class="docutils literal notranslate"><span class="pre">analyses</span></code>/<code class="docutils literal notranslate"><span class="pre">refreshable</span></code> selector syntax and staleness detection; this
 plugin only implements what happens when such a resubmission occurs.</p>
-<p>The <strong>first</strong> time a <code class="docutils literal notranslate"><span class="pre">SubjectAnalysis</span></code> PESummary production runs (or if a
-previously-included analysis has dropped out of the resolved set, for
-example after a review decision), it submits a single <code class="docutils literal notranslate"><span class="pre">summarypages</span></code> run
-combining every currently resolved source analysis.</p>
+<p>The <strong>first</strong> time a <code class="docutils literal notranslate"><span class="pre">SubjectAnalysis</span></code> PESummary production runs, it
+submits a single <code class="docutils literal notranslate"><span class="pre">summarypages</span></code> run combining every currently resolved
+source analysis.</p>
 <p>On a <strong>later refresh that only adds</strong> newly-resolved analyses to an
 already-published page, only the new analyses are submitted, using
 <code class="docutils literal notranslate"><span class="pre">summarypages</span></code>’s own <code class="docutils literal notranslate"><span class="pre">--add_to_existing</span></code>/<code class="docutils literal notranslate"><span class="pre">--existing_webdir</span></code> flags to
 append them to the existing pages in place, rather than reprocessing every
 source analysis again from scratch.</p>
+<p>On a <strong>later refresh that only removes</strong> analyses (for example after a
+review decision drops a production from the <code class="docutils literal notranslate"><span class="pre">analyses</span></code> selector, with
+nothing new added), <code class="docutils literal notranslate"><span class="pre">summarypages</span></code> has no way to retract a label from an
+already-published page in place – but recombining every remaining analysis
+from scratch would also be wasteful, since none of their posteriors have
+changed. Instead, <code class="docutils literal notranslate"><span class="pre">summarymodify</span> <span class="pre">--remove_label</span></code> strips the removed
+analyses out of the existing metafile directly, and <code class="docutils literal notranslate"><span class="pre">summarypages</span></code> is
+re-run against that trimmed metafile to regenerate the pages, without
+reprocessing the analyses that remain.</p>
+<p>Anything else – a refresh that both adds and removes analyses at once, or
+a previously-published page that’s gone missing on disk – falls back to a
+full rebuild, recombining every currently resolved analysis from scratch.</p>
 <div class="admonition note">
 <p class="admonition-title">Note</p>
-<p><code class="docutils literal notranslate"><span class="pre">summarypages</span></code> has no way to retract a label from an already-published
-page. If a previously-included analysis is later <em>removed</em> from the
-resolved set, the next refresh falls back to a full rebuild (recombining
-every currently resolved analysis) instead of an incremental update.</p>
+<p>Renaming a stored analysis (for example after a production is renamed in
+the ledger) is not handled automatically, since a before/after diff of
+resolved dependency names alone can’t distinguish a rename from an
+unrelated removal and addition. Call <code class="docutils literal notranslate"><span class="pre">PESummary.rename_analysis()</span></code>
+directly to rename a label in the published metafile in place via
+<code class="docutils literal notranslate"><span class="pre">summarymodify</span></code>, without triggering a re-run.</p>
 </div>
 <div class="toctree-wrapper compound">
 <p class="caption" role="heading"><span class="caption-text">Reference</span></p>

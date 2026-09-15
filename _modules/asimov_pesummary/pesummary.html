@@ -263,6 +263,7 @@
 
 <span class="kn">import</span><span class="w"> </span><span class="nn">importlib.resources</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">os</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">shlex</span>
 
 <span class="kn">from</span><span class="w"> </span><span class="nn">asimov</span><span class="w"> </span><span class="kn">import</span> <span class="n">utils</span>  <span class="c1"># NoQA</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">asimov</span><span class="w"> </span><span class="kn">import</span> <span class="n">config</span><span class="p">,</span> <span class="n">logger</span><span class="p">,</span> <span class="n">logging</span><span class="p">,</span> <span class="n">LOGGER_LEVEL</span>  <span class="c1"># NoQA</span>
@@ -284,17 +285,37 @@
 <span class="sd">    ``SubjectAnalysis`` (combining several productions' samples into one set</span>
 <span class="sd">    of summary pages). ``SubjectAnalysis`` productions marked ``refreshable:</span>
 <span class="sd">    true`` are automatically resubmitted by asimov's monitor loop whenever</span>
-<span class="sd">    their resolved source analyses change; when that happens here, only the</span>
-<span class="sd">    newly-added analyses are passed to ``summarypages``, using its own</span>
-<span class="sd">    ``--add_to_existing``/``--existing_webdir`` flags to append them to the</span>
-<span class="sd">    already-published pages rather than recombining everything from</span>
-<span class="sd">    scratch. If an analysis is ever removed from the combined set,</span>
-<span class="sd">    ``summarypages`` cannot retract a label from an existing page in place,</span>
-<span class="sd">    so a full rebuild is triggered instead.</span>
+<span class="sd">    their resolved source analyses change; when that happens here, one of</span>
+<span class="sd">    three things is submitted depending on how the resolved set changed</span>
+<span class="sd">    since the last run:</span>
+
+<span class="sd">    - analyses added only: the newly-added analyses are passed to</span>
+<span class="sd">      ``summarypages``, using its own ``--add_to_existing``/</span>
+<span class="sd">      ``--existing_webdir`` flags to append them to the already-published</span>
+<span class="sd">      pages rather than recombining everything from scratch;</span>
+<span class="sd">    - analyses removed only (nothing added): ``summarypages`` has no way to</span>
+<span class="sd">      retract a label from an existing page in place, so instead</span>
+<span class="sd">      ``summarymodify --remove_label`` strips the removed analyses out of</span>
+<span class="sd">      the existing metafile directly, and ``summarypages`` is re-run</span>
+<span class="sd">      against that trimmed metafile to regenerate the pages -- cheap, since</span>
+<span class="sd">      none of the surviving analyses' posteriors need recomputing;</span>
+<span class="sd">    - anything else (a mix of additions and removals, the first run, or a</span>
+<span class="sd">      previous page that's gone missing on disk): a full rebuild is</span>
+<span class="sd">      triggered, recombining every currently-resolved analysis from</span>
+<span class="sd">      scratch.</span>
+
+<span class="sd">    ``rename_analysis()`` exposes a related ``summarymodify`` operation</span>
+<span class="sd">    (renaming a stored label) directly, for callers to invoke explicitly --</span>
+<span class="sd">    it isn't wired into the automatic refresh above, since a before/after</span>
+<span class="sd">    diff of resolved dependency names alone can't distinguish "renamed"</span>
+<span class="sd">    from "removed one, added an unrelated one".</span>
 <span class="sd">    """</span>
 
     <span class="n">executable</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span>
         <span class="n">config</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"pipelines"</span><span class="p">,</span> <span class="s2">"environment"</span><span class="p">),</span> <span class="s2">"bin"</span><span class="p">,</span> <span class="s2">"summarypages"</span>
+    <span class="p">)</span>
+    <span class="n">modify_executable</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span>
+        <span class="n">config</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"pipelines"</span><span class="p">,</span> <span class="s2">"environment"</span><span class="p">),</span> <span class="s2">"bin"</span><span class="p">,</span> <span class="s2">"summarymodify"</span>
     <span class="p">)</span>
     <span class="n">name</span> <span class="o">=</span> <span class="s2">"PESummary"</span>
 
@@ -420,9 +441,34 @@
 <span class="sd">        ``posterior_samples.h5`` exists, is readable, and (for a</span>
 <span class="sd">        ``SubjectAnalysis``) contains every expected analysis's label as a</span>
 <span class="sd">        top-level group.</span>
+
+<span class="sd">        That check alone is unsound while a removal or rename (see</span>
+<span class="sd">        ``_submit_subject_analysis_removal``/``rename_analysis``) is</span>
+<span class="sd">        in-flight: it only checks that *expected* labels are present, never</span>
+<span class="sd">        that anything unexpected is absent, so an untouched metafile from</span>
+<span class="sd">        *before* a removal already satisfies "surviving labels present" --</span>
+<span class="sd">        it would look complete before the ``summarymodify``/``summarypages``</span>
+<span class="sd">        chain has even run, let alone finished. So when a chained operation</span>
+<span class="sd">        is pending (tracked via the ``pesummary_pending_chain_labels`` meta</span>
+<span class="sd">        key), this first requires the chain's own completion marker to</span>
+<span class="sd">        exist -- proof every step of that script actually ran, not just the</span>
+<span class="sd">        first -- before finalising ``resolved_dependencies`` to what the</span>
+<span class="sd">        chain was renaming/removing towards and falling through to the</span>
+<span class="sd">        normal check above.</span>
 <span class="sd">        """</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">is_subject_analysis</span><span class="p">:</span>
+            <span class="n">pending</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">production</span><span class="o">.</span><span class="n">meta</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"pesummary_pending_chain_labels"</span><span class="p">)</span>
+            <span class="k">if</span> <span class="n">pending</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+                <span class="k">if</span> <span class="ow">not</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">exists</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_chain_completion_marker</span><span class="p">()):</span>
+                    <span class="k">return</span> <span class="kc">False</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">production</span><span class="o">.</span><span class="n">resolved_dependencies</span> <span class="o">=</span> <span class="n">pending</span>
+                <span class="k">del</span> <span class="bp">self</span><span class="o">.</span><span class="n">production</span><span class="o">.</span><span class="n">meta</span><span class="p">[</span><span class="s2">"pesummary_pending_chain_labels"</span><span class="p">]</span>
         <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">detect_completion_processing</span><span class="p">()</span></div>
 
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">_chain_completion_marker</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">"""Path touched by ``_submit_chain`` once every step has succeeded."""</span>
+        <span class="k">return</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_webdir</span><span class="p">(),</span> <span class="s2">".pesummary_chain_complete"</span><span class="p">)</span>
 
 <div class="viewcode-block" id="PESummary.build_dag">
 <a class="viewcode-back" href="../../api.html#asimov_pesummary.pesummary.PESummary.build_dag">[docs]</a>
@@ -470,11 +516,36 @@
             <span class="k">if</span> <span class="s2">"precessing snr"</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">meta</span><span class="p">[</span><span class="s2">"calculate"</span><span class="p">]:</span>
                 <span class="n">command</span> <span class="o">+=</span> <span class="p">[</span><span class="s2">"--calculate_precessing_snr"</span><span class="p">]</span>
 
+    <span class="k">def</span><span class="w"> </span><span class="nf">_submit_description</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">"""</span>
+<span class="sd">        Build the HTCondor submit description fields shared by every</span>
+<span class="sd">        PESummary job, regardless of whether it runs a single</span>
+<span class="sd">        ``summarypages`` command or a chained ``summarymodify`` +</span>
+<span class="sd">        ``summarypages`` script. Caller fills in ``executable`` and</span>
+<span class="sd">        ``arguments``.</span>
+<span class="sd">        """</span>
+        <span class="n">submit_description</span> <span class="o">=</span> <span class="p">{</span>
+            <span class="s2">"output"</span><span class="p">:</span> <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">subject</span><span class="o">.</span><span class="n">work_dir</span><span class="si">}</span><span class="s2">/pesummary.out"</span><span class="p">,</span>
+            <span class="s2">"error"</span><span class="p">:</span> <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">subject</span><span class="o">.</span><span class="n">work_dir</span><span class="si">}</span><span class="s2">/pesummary.err"</span><span class="p">,</span>
+            <span class="s2">"log"</span><span class="p">:</span> <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">subject</span><span class="o">.</span><span class="n">work_dir</span><span class="si">}</span><span class="s2">/pesummary.log"</span><span class="p">,</span>
+            <span class="s2">"request_cpus"</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">meta</span><span class="p">[</span><span class="s2">"multiprocess"</span><span class="p">],</span>
+            <span class="s2">"getenv"</span><span class="p">:</span> <span class="s2">"true"</span><span class="p">,</span>
+            <span class="s2">"batch_name"</span><span class="p">:</span> <span class="sa">f</span><span class="s2">"Summary Pages/</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">subject</span><span class="o">.</span><span class="n">name</span><span class="si">}</span><span class="s2">/</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">production</span><span class="o">.</span><span class="n">name</span><span class="si">}</span><span class="s2">"</span><span class="p">,</span>
+            <span class="s2">"request_memory"</span><span class="p">:</span> <span class="s2">"8192MB"</span><span class="p">,</span>
+            <span class="s2">"should_transfer_files"</span><span class="p">:</span> <span class="s2">"YES"</span><span class="p">,</span>
+            <span class="s2">"request_disk"</span><span class="p">:</span> <span class="s2">"8192MB"</span><span class="p">,</span>
+        <span class="p">}</span>
+        <span class="k">if</span> <span class="s2">"accounting group"</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">meta</span><span class="p">:</span>
+            <span class="n">submit_description</span><span class="p">[</span><span class="s2">"accounting_group_user"</span><span class="p">]</span> <span class="o">=</span> <span class="n">config</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"condor"</span><span class="p">,</span> <span class="s2">"user"</span><span class="p">)</span>
+            <span class="n">submit_description</span><span class="p">[</span><span class="s2">"accounting_group"</span><span class="p">]</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">meta</span><span class="p">[</span><span class="s2">"accounting group"</span><span class="p">]</span>
+        <span class="k">return</span> <span class="n">submit_description</span>
+
     <span class="k">def</span><span class="w"> </span><span class="nf">_submit</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">command</span><span class="p">,</span> <span class="n">dryrun</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">"""</span>
 <span class="sd">        Write the job script, build the submit description, and submit (or,</span>
-<span class="sd">        if ``dryrun``, just print what would happen). Shared by both the</span>
-<span class="sd">        single-analysis and subject-analysis submission paths.</span>
+<span class="sd">        if ``dryrun``, just print what would happen). Used for a plain,</span>
+<span class="sd">        single ``summarypages`` invocation -- both the single-analysis path</span>
+<span class="sd">        and the subject-analysis add/full-rebuild paths.</span>
 <span class="sd">        """</span>
         <span class="k">with</span> <span class="n">utils</span><span class="o">.</span><span class="n">set_directory</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">subject</span><span class="o">.</span><span class="n">work_dir</span><span class="p">):</span>
             <span class="k">with</span> <span class="nb">open</span><span class="p">(</span><span class="s2">"pesummary.sh"</span><span class="p">,</span> <span class="s2">"w"</span><span class="p">)</span> <span class="k">as</span> <span class="n">bash_file</span><span class="p">:</span>
@@ -489,22 +560,87 @@
             <span class="nb">print</span><span class="p">(</span><span class="s2">"-----------------"</span><span class="p">)</span>
             <span class="nb">print</span><span class="p">(</span><span class="s2">" "</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">command</span><span class="p">))</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">subject</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">production</span><span class="o">.</span><span class="n">event</span>
-        <span class="n">submit_description</span> <span class="o">=</span> <span class="p">{</span>
-            <span class="s2">"executable"</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">executable</span><span class="p">,</span>
-            <span class="s2">"arguments"</span><span class="p">:</span> <span class="s2">" "</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">command</span><span class="p">),</span>
-            <span class="s2">"output"</span><span class="p">:</span> <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">subject</span><span class="o">.</span><span class="n">work_dir</span><span class="si">}</span><span class="s2">/pesummary.out"</span><span class="p">,</span>
-            <span class="s2">"error"</span><span class="p">:</span> <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">subject</span><span class="o">.</span><span class="n">work_dir</span><span class="si">}</span><span class="s2">/pesummary.err"</span><span class="p">,</span>
-            <span class="s2">"log"</span><span class="p">:</span> <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">subject</span><span class="o">.</span><span class="n">work_dir</span><span class="si">}</span><span class="s2">/pesummary.log"</span><span class="p">,</span>
-            <span class="s2">"request_cpus"</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">meta</span><span class="p">[</span><span class="s2">"multiprocess"</span><span class="p">],</span>
-            <span class="s2">"getenv"</span><span class="p">:</span> <span class="s2">"true"</span><span class="p">,</span>
-            <span class="s2">"batch_name"</span><span class="p">:</span> <span class="sa">f</span><span class="s2">"Summary Pages/</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">subject</span><span class="o">.</span><span class="n">name</span><span class="si">}</span><span class="s2">/</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">production</span><span class="o">.</span><span class="n">name</span><span class="si">}</span><span class="s2">"</span><span class="p">,</span>
-            <span class="s2">"request_memory"</span><span class="p">:</span> <span class="s2">"8192MB"</span><span class="p">,</span>
-            <span class="s2">"should_transfer_files"</span><span class="p">:</span> <span class="s2">"YES"</span><span class="p">,</span>
-            <span class="s2">"request_disk"</span><span class="p">:</span> <span class="s2">"8192MB"</span><span class="p">,</span>
-        <span class="p">}</span>
-        <span class="k">if</span> <span class="s2">"accounting group"</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">meta</span><span class="p">:</span>
-            <span class="n">submit_description</span><span class="p">[</span><span class="s2">"accounting_group_user"</span><span class="p">]</span> <span class="o">=</span> <span class="n">config</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"condor"</span><span class="p">,</span> <span class="s2">"user"</span><span class="p">)</span>
-            <span class="n">submit_description</span><span class="p">[</span><span class="s2">"accounting_group"</span><span class="p">]</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">meta</span><span class="p">[</span><span class="s2">"accounting group"</span><span class="p">]</span>
+        <span class="n">submit_description</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_submit_description</span><span class="p">()</span>
+        <span class="n">submit_description</span><span class="p">[</span><span class="s2">"executable"</span><span class="p">]</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">executable</span>
+        <span class="n">submit_description</span><span class="p">[</span><span class="s2">"arguments"</span><span class="p">]</span> <span class="o">=</span> <span class="s2">" "</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">command</span><span class="p">)</span>
+
+        <span class="k">if</span> <span class="n">dryrun</span><span class="p">:</span>
+            <span class="nb">print</span><span class="p">(</span><span class="s2">"SUBMIT DESCRIPTION"</span><span class="p">)</span>
+            <span class="nb">print</span><span class="p">(</span><span class="s2">"------------------"</span><span class="p">)</span>
+            <span class="nb">print</span><span class="p">(</span><span class="n">submit_description</span><span class="p">)</span>
+
+        <span class="k">if</span> <span class="ow">not</span> <span class="n">dryrun</span><span class="p">:</span>
+            <span class="n">job</span> <span class="o">=</span> <span class="n">create_job_from_dict</span><span class="p">(</span><span class="n">submit_description</span><span class="p">)</span>
+            <span class="n">cluster_id</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">scheduler</span><span class="o">.</span><span class="n">submit</span><span class="p">(</span><span class="n">job</span><span class="p">)</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="n">cluster_id</span> <span class="o">=</span> <span class="mi">0</span>
+
+        <span class="k">return</span> <span class="n">cluster_id</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">_submit_chain</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">steps</span><span class="p">,</span> <span class="n">dryrun</span><span class="p">,</span> <span class="n">completion_marker</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">"""</span>
+<span class="sd">        Write a small ``bash -e`` script running an ordered sequence of</span>
+<span class="sd">        PESummary executables, then submit it as a single HTCondor job</span>
+<span class="sd">        (stopping at the first failing step).</span>
+
+<span class="sd">        Used where one ``summarypages`` invocation isn't enough: removing</span>
+<span class="sd">        or renaming an analysis in an already-published combined page</span>
+<span class="sd">        means editing the existing metafile with ``summarymodify`` first,</span>
+<span class="sd">        then re-rendering the pages from it with ``summarypages``.</span>
+
+<span class="sd">        Each step is written with proper shell quoting (``shlex.join``),</span>
+<span class="sd">        since a label or path could in principle contain whitespace or</span>
+<span class="sd">        shell metacharacters. The script is declared as an HTCondor input</span>
+<span class="sd">        file and run by its transferred, job-relative name -- not the</span>
+<span class="sd">        submit-side absolute path -- so it (and thus the job) doesn't</span>
+<span class="sd">        depend on the execute node sharing a filesystem with the submit</span>
+<span class="sd">        host.</span>
+
+<span class="sd">        If ``completion_marker`` is given, any existing file at that path</span>
+<span class="sd">        is removed synchronously before the job is written/submitted, and</span>
+<span class="sd">        the script's final line touches it -- so its existence, checked</span>
+<span class="sd">        later by a caller, means every step up to and including the last</span>
+<span class="sd">        one actually ran to completion, not just that the first</span>
+<span class="sd">        (``summarymodify``) step landed. See ``_submit_subject_analysis_removal``</span>
+<span class="sd">        and ``rename_analysis``, which rely on this to avoid declaring the</span>
+<span class="sd">        production complete before the chained job has actually finished.</span>
+
+<span class="sd">        Parameters</span>
+<span class="sd">        ----------</span>
+<span class="sd">        steps : list of (str, list of str)</span>
+<span class="sd">            ``(executable, arguments)`` pairs, run in order.</span>
+<span class="sd">        completion_marker : str, optional</span>
+<span class="sd">            Path to touch once every step has succeeded.</span>
+<span class="sd">        """</span>
+        <span class="n">lines</span> <span class="o">=</span> <span class="p">[</span><span class="s2">"#!/bin/bash"</span><span class="p">,</span> <span class="s2">"set -e"</span><span class="p">]</span>
+        <span class="n">lines</span> <span class="o">+=</span> <span class="p">[</span><span class="n">shlex</span><span class="o">.</span><span class="n">join</span><span class="p">([</span><span class="n">executable</span><span class="p">,</span> <span class="o">*</span><span class="n">args</span><span class="p">])</span> <span class="k">for</span> <span class="n">executable</span><span class="p">,</span> <span class="n">args</span> <span class="ow">in</span> <span class="n">steps</span><span class="p">]</span>
+        <span class="k">if</span> <span class="n">completion_marker</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="n">lines</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="sa">f</span><span class="s2">"touch </span><span class="si">{</span><span class="n">shlex</span><span class="o">.</span><span class="n">quote</span><span class="p">(</span><span class="n">completion_marker</span><span class="p">)</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+        <span class="n">script</span> <span class="o">=</span> <span class="s2">"</span><span class="se">\n</span><span class="s2">"</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">lines</span><span class="p">)</span> <span class="o">+</span> <span class="s2">"</span><span class="se">\n</span><span class="s2">"</span>
+        <span class="n">script_name</span> <span class="o">=</span> <span class="s2">"pesummary.sh"</span>
+        <span class="n">script_path</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">subject</span><span class="o">.</span><span class="n">work_dir</span><span class="p">,</span> <span class="n">script_name</span><span class="p">)</span>
+
+        <span class="k">if</span> <span class="n">completion_marker</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span> <span class="ow">not</span> <span class="n">dryrun</span><span class="p">:</span>
+            <span class="k">try</span><span class="p">:</span>
+                <span class="n">os</span><span class="o">.</span><span class="n">remove</span><span class="p">(</span><span class="n">completion_marker</span><span class="p">)</span>
+            <span class="k">except</span> <span class="ne">FileNotFoundError</span><span class="p">:</span>
+                <span class="k">pass</span>
+
+        <span class="k">with</span> <span class="n">utils</span><span class="o">.</span><span class="n">set_directory</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">subject</span><span class="o">.</span><span class="n">work_dir</span><span class="p">):</span>
+            <span class="k">with</span> <span class="nb">open</span><span class="p">(</span><span class="n">script_name</span><span class="p">,</span> <span class="s2">"w"</span><span class="p">)</span> <span class="k">as</span> <span class="n">bash_file</span><span class="p">:</span>
+                <span class="n">bash_file</span><span class="o">.</span><span class="n">write</span><span class="p">(</span><span class="n">script</span><span class="p">)</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">"PE summary command:</span><span class="se">\n</span><span class="si">{</span><span class="n">script</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+
+        <span class="k">if</span> <span class="n">dryrun</span><span class="p">:</span>
+            <span class="nb">print</span><span class="p">(</span><span class="s2">"PESUMMARY COMMAND"</span><span class="p">)</span>
+            <span class="nb">print</span><span class="p">(</span><span class="s2">"-----------------"</span><span class="p">)</span>
+            <span class="nb">print</span><span class="p">(</span><span class="n">script</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">subject</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">production</span><span class="o">.</span><span class="n">event</span>
+        <span class="n">submit_description</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_submit_description</span><span class="p">()</span>
+        <span class="n">submit_description</span><span class="p">[</span><span class="s2">"executable"</span><span class="p">]</span> <span class="o">=</span> <span class="s2">"/bin/bash"</span>
+        <span class="n">submit_description</span><span class="p">[</span><span class="s2">"arguments"</span><span class="p">]</span> <span class="o">=</span> <span class="n">script_name</span>
+        <span class="n">submit_description</span><span class="p">[</span><span class="s2">"transfer_input_files"</span><span class="p">]</span> <span class="o">=</span> <span class="n">script_path</span>
 
         <span class="k">if</span> <span class="n">dryrun</span><span class="p">:</span>
             <span class="nb">print</span><span class="p">(</span><span class="s2">"SUBMIT DESCRIPTION"</span><span class="p">)</span>
@@ -632,12 +768,9 @@
 <span class="w">        </span><span class="sd">"""</span>
 <span class="sd">        Run PESummary on the combined results of several source analyses.</span>
 
-<span class="sd">        On the first run (or if an analysis has been removed from the</span>
-<span class="sd">        resolved set since the last run), every resolved source analysis is</span>
-<span class="sd">        submitted together. On a later refresh that only adds analyses to</span>
-<span class="sd">        an already-published page, just the new analyses are submitted,</span>
-<span class="sd">        using ``summarypages --add_to_existing`` to append them in place</span>
-<span class="sd">        rather than recombining everything from scratch.</span>
+<span class="sd">        See the class docstring for how the first run, an add-only</span>
+<span class="sd">        refresh, a remove-only refresh, and everything else are each</span>
+<span class="sd">        handled differently.</span>
 <span class="sd">        """</span>
         <span class="n">source_analyses</span> <span class="o">=</span> <span class="nb">list</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">production</span><span class="o">.</span><span class="n">analyses</span><span class="p">)</span>
         <span class="k">if</span> <span class="ow">not</span> <span class="n">source_analyses</span><span class="p">:</span>
@@ -649,13 +782,32 @@
         <span class="n">current_names</span> <span class="o">=</span> <span class="nb">sorted</span><span class="p">(</span><span class="n">analysis</span><span class="o">.</span><span class="n">name</span> <span class="k">for</span> <span class="n">analysis</span> <span class="ow">in</span> <span class="n">source_analyses</span><span class="p">)</span>
         <span class="n">previous_names</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">production</span><span class="o">.</span><span class="n">resolved_dependencies</span>
         <span class="n">webdir</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_webdir</span><span class="p">()</span>
+        <span class="n">page_exists</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">exists</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">webdir</span><span class="p">,</span> <span class="s2">"home.html"</span><span class="p">))</span>
+
+        <span class="n">previous_set</span> <span class="o">=</span> <span class="nb">set</span><span class="p">(</span><span class="n">previous_names</span><span class="p">)</span> <span class="k">if</span> <span class="n">previous_names</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="k">else</span> <span class="kc">None</span>
+        <span class="n">current_set</span> <span class="o">=</span> <span class="nb">set</span><span class="p">(</span><span class="n">current_names</span><span class="p">)</span>
 
         <span class="n">incremental</span> <span class="o">=</span> <span class="nb">bool</span><span class="p">(</span>
-            <span class="n">previous_names</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
-            <span class="ow">and</span> <span class="nb">set</span><span class="p">(</span><span class="n">previous_names</span><span class="p">)</span> <span class="o">&lt;=</span> <span class="nb">set</span><span class="p">(</span><span class="n">current_names</span><span class="p">)</span>
-            <span class="ow">and</span> <span class="nb">set</span><span class="p">(</span><span class="n">current_names</span><span class="p">)</span> <span class="o">-</span> <span class="nb">set</span><span class="p">(</span><span class="n">previous_names</span><span class="p">)</span>
-            <span class="ow">and</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">exists</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">webdir</span><span class="p">,</span> <span class="s2">"home.html"</span><span class="p">))</span>
+            <span class="n">previous_set</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
+            <span class="ow">and</span> <span class="n">previous_set</span> <span class="o">&lt;=</span> <span class="n">current_set</span>
+            <span class="ow">and</span> <span class="n">current_set</span> <span class="o">-</span> <span class="n">previous_set</span>
+            <span class="ow">and</span> <span class="n">page_exists</span>
         <span class="p">)</span>
+        <span class="c1"># Strictly fewer resolved analyses than last time, and nothing new</span>
+        <span class="c1"># -- a pure removal, handled by editing the existing metafile</span>
+        <span class="c1"># in place rather than recombining everything from scratch.</span>
+        <span class="n">removal_only</span> <span class="o">=</span> <span class="nb">bool</span><span class="p">(</span>
+            <span class="n">previous_set</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
+            <span class="ow">and</span> <span class="n">current_set</span> <span class="o">&lt;</span> <span class="n">previous_set</span>
+            <span class="ow">and</span> <span class="n">page_exists</span>
+        <span class="p">)</span>
+
+        <span class="k">if</span> <span class="n">removal_only</span><span class="p">:</span>
+            <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">_submit_subject_analysis_removal</span><span class="p">(</span>
+                <span class="n">removed</span><span class="o">=</span><span class="nb">sorted</span><span class="p">(</span><span class="n">previous_set</span> <span class="o">-</span> <span class="n">current_set</span><span class="p">),</span>
+                <span class="n">webdir</span><span class="o">=</span><span class="n">webdir</span><span class="p">,</span>
+                <span class="n">dryrun</span><span class="o">=</span><span class="n">dryrun</span><span class="p">,</span>
+            <span class="p">)</span>
 
         <span class="k">if</span> <span class="n">incremental</span><span class="p">:</span>
             <span class="n">analyses_to_submit</span> <span class="o">=</span> <span class="p">[</span>
@@ -769,7 +921,143 @@
             <span class="nb">set</span><span class="p">(</span><span class="n">previous_names</span> <span class="ow">or</span> <span class="p">[])</span> <span class="o">|</span> <span class="nb">set</span><span class="p">(</span><span class="n">labels</span><span class="p">)</span>
         <span class="p">)</span>
 
-        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">_submit</span><span class="p">(</span><span class="n">command</span><span class="p">,</span> <span class="n">dryrun</span><span class="p">)</span></div>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">_submit</span><span class="p">(</span><span class="n">command</span><span class="p">,</span> <span class="n">dryrun</span><span class="p">)</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">_submit_subject_analysis_removal</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">removed</span><span class="p">,</span> <span class="n">webdir</span><span class="p">,</span> <span class="n">dryrun</span><span class="o">=</span><span class="kc">False</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">"""</span>
+<span class="sd">        Drop one or more analyses from an already-published combined page,</span>
+<span class="sd">        without recombining the analyses that remain.</span>
+
+<span class="sd">        Called from ``_submit_subject_analysis`` when a refresh finds the</span>
+<span class="sd">        resolved source analyses have only shrunk since the last</span>
+<span class="sd">        successful run (nothing new, one or more gone). Runs</span>
+<span class="sd">        ``summarymodify --remove_label`` against the existing metafile to</span>
+<span class="sd">        strip the removed analyses' data out of it directly, then re-runs</span>
+<span class="sd">        ``summarypages`` against that trimmed metafile so the published</span>
+<span class="sd">        pages/plots no longer reference them. Neither step re-samples or</span>
+<span class="sd">        recombines the analyses that remain -- a pesummary metafile</span>
+<span class="sd">        carries its own stored labels, and ``summarypages`` uses those</span>
+<span class="sd">        (ignoring/warning on any ``--labels`` passed alongside a metafile</span>
+<span class="sd">        input), so the surviving analyses are picked up automatically once</span>
+<span class="sd">        the removed ones are gone from the file.</span>
+
+<span class="sd">        ``resolved_dependencies`` isn't shrunk to the surviving set until</span>
+<span class="sd">        ``detect_completion()`` confirms the chain actually finished (see</span>
+<span class="sd">        ``_submit_chain``'s ``completion_marker``): core's</span>
+<span class="sd">        ``detect_completion_processing()`` only checks that *expected*</span>
+<span class="sd">        labels are present, not that removed ones are gone, so the</span>
+<span class="sd">        untouched, pre-removal metafile would otherwise already satisfy</span>
+<span class="sd">        "surviving labels present" -- making the production look complete</span>
+<span class="sd">        before the job has even run.</span>
+<span class="sd">        """</span>
+        <span class="n">metafile</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">results</span><span class="p">()[</span><span class="s2">"metafile"</span><span class="p">]</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">exists</span><span class="p">(</span><span class="n">metafile</span><span class="p">):</span>
+            <span class="k">raise</span> <span class="n">PipelineException</span><span class="p">(</span>
+                <span class="sa">f</span><span class="s2">"PESummary subject analysis </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">production</span><span class="o">.</span><span class="n">name</span><span class="si">}</span><span class="s2">: cannot "</span>
+                <span class="sa">f</span><span class="s2">"remove </span><span class="si">{</span><span class="s1">', '</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">removed</span><span class="p">)</span><span class="si">}</span><span class="s2"> -- no existing metafile found "</span>
+                <span class="sa">f</span><span class="s2">"at </span><span class="si">{</span><span class="n">metafile</span><span class="si">}</span><span class="s2">."</span>
+            <span class="p">)</span>
+
+        <span class="n">modify_command</span> <span class="o">=</span> <span class="p">[</span>
+            <span class="s2">"--samples"</span><span class="p">,</span> <span class="n">metafile</span><span class="p">,</span>
+            <span class="s2">"--webdir"</span><span class="p">,</span> <span class="n">webdir</span><span class="p">,</span>
+            <span class="s2">"--remove_label"</span><span class="p">,</span> <span class="o">*</span><span class="n">removed</span><span class="p">,</span>
+            <span class="s2">"--overwrite"</span><span class="p">,</span>
+        <span class="p">]</span>
+        <span class="n">regenerate_command</span> <span class="o">=</span> <span class="p">[</span><span class="s2">"--webdir"</span><span class="p">,</span> <span class="n">webdir</span><span class="p">,</span> <span class="s2">"--samples"</span><span class="p">,</span> <span class="n">metafile</span><span class="p">,</span> <span class="s2">"--gw"</span><span class="p">]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_append_shared_options</span><span class="p">(</span><span class="n">regenerate_command</span><span class="p">)</span>
+
+        <span class="n">surviving</span> <span class="o">=</span> <span class="nb">sorted</span><span class="p">(</span><span class="nb">set</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">production</span><span class="o">.</span><span class="n">resolved_dependencies</span><span class="p">)</span> <span class="o">-</span> <span class="nb">set</span><span class="p">(</span><span class="n">removed</span><span class="p">))</span>
+
+        <span class="n">cluster_id</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_submit_chain</span><span class="p">(</span>
+            <span class="p">[</span>
+                <span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">modify_executable</span><span class="p">,</span> <span class="n">modify_command</span><span class="p">),</span>
+                <span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">executable</span><span class="p">,</span> <span class="n">regenerate_command</span><span class="p">),</span>
+            <span class="p">],</span>
+            <span class="n">dryrun</span><span class="p">,</span>
+            <span class="n">completion_marker</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">_chain_completion_marker</span><span class="p">(),</span>
+        <span class="p">)</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">production</span><span class="o">.</span><span class="n">meta</span><span class="p">[</span><span class="s2">"pesummary_pending_chain_labels"</span><span class="p">]</span> <span class="o">=</span> <span class="n">surviving</span>
+
+        <span class="k">return</span> <span class="n">cluster_id</span>
+
+<div class="viewcode-block" id="PESummary.rename_analysis">
+<a class="viewcode-back" href="../../api.html#asimov_pesummary.pesummary.PESummary.rename_analysis">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">rename_analysis</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">old_label</span><span class="p">,</span> <span class="n">new_label</span><span class="p">,</span> <span class="n">dryrun</span><span class="o">=</span><span class="kc">False</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">"""</span>
+<span class="sd">        Rename a stored analysis in this subject analysis's published</span>
+<span class="sd">        metafile, without re-running or recombining anything.</span>
+
+<span class="sd">        This is not wired into the automatic refresh cycle: given only a</span>
+<span class="sd">        before/after diff of resolved dependency names, asimov can't tell</span>
+<span class="sd">        "an analysis was renamed" apart from "one was removed and an</span>
+<span class="sd">        unrelated one was added". Call this directly -- e.g. from a</span>
+<span class="sd">        one-off script -- when a production has been renamed in the</span>
+<span class="sd">        ledger and its already-computed results should carry over under</span>
+<span class="sd">        the new name rather than triggering a full re-run.</span>
+
+<span class="sd">        Parameters</span>
+<span class="sd">        ----------</span>
+<span class="sd">        old_label : str</span>
+<span class="sd">            The analysis's current stored label.</span>
+<span class="sd">        new_label : str</span>
+<span class="sd">            The label to rename it to.</span>
+<span class="sd">        dryrun : bool, optional</span>
+<span class="sd">            If True, print the commands that would be run rather than</span>
+<span class="sd">            submitting them.</span>
+<span class="sd">        """</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="bp">self</span><span class="o">.</span><span class="n">is_subject_analysis</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="n">PipelineException</span><span class="p">(</span>
+                <span class="s2">"rename_analysis() only applies to PESummary SubjectAnalysis "</span>
+                <span class="s2">"productions."</span>
+            <span class="p">)</span>
+
+        <span class="n">webdir</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_webdir</span><span class="p">()</span>
+        <span class="n">metafile</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">results</span><span class="p">()[</span><span class="s2">"metafile"</span><span class="p">]</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">exists</span><span class="p">(</span><span class="n">metafile</span><span class="p">):</span>
+            <span class="k">raise</span> <span class="n">PipelineException</span><span class="p">(</span>
+                <span class="sa">f</span><span class="s2">"PESummary subject analysis </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">production</span><span class="o">.</span><span class="n">name</span><span class="si">}</span><span class="s2">: cannot "</span>
+                <span class="sa">f</span><span class="s2">"rename '</span><span class="si">{</span><span class="n">old_label</span><span class="si">}</span><span class="s2">' -- no existing metafile found at "</span>
+                <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">metafile</span><span class="si">}</span><span class="s2">."</span>
+            <span class="p">)</span>
+
+        <span class="n">modify_command</span> <span class="o">=</span> <span class="p">[</span>
+            <span class="s2">"--samples"</span><span class="p">,</span> <span class="n">metafile</span><span class="p">,</span>
+            <span class="s2">"--webdir"</span><span class="p">,</span> <span class="n">webdir</span><span class="p">,</span>
+            <span class="s2">"--labels"</span><span class="p">,</span> <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">old_label</span><span class="si">}</span><span class="s2">:</span><span class="si">{</span><span class="n">new_label</span><span class="si">}</span><span class="s2">"</span><span class="p">,</span>
+            <span class="s2">"--overwrite"</span><span class="p">,</span>
+        <span class="p">]</span>
+        <span class="n">regenerate_command</span> <span class="o">=</span> <span class="p">[</span><span class="s2">"--webdir"</span><span class="p">,</span> <span class="n">webdir</span><span class="p">,</span> <span class="s2">"--samples"</span><span class="p">,</span> <span class="n">metafile</span><span class="p">,</span> <span class="s2">"--gw"</span><span class="p">]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_append_shared_options</span><span class="p">(</span><span class="n">regenerate_command</span><span class="p">)</span>
+
+        <span class="n">target_resolved</span> <span class="o">=</span> <span class="kc">None</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">production</span><span class="o">.</span><span class="n">resolved_dependencies</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="n">target_resolved</span> <span class="o">=</span> <span class="nb">sorted</span><span class="p">(</span>
+                <span class="n">new_label</span> <span class="k">if</span> <span class="n">name</span> <span class="o">==</span> <span class="n">old_label</span> <span class="k">else</span> <span class="n">name</span>
+                <span class="k">for</span> <span class="n">name</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">production</span><span class="o">.</span><span class="n">resolved_dependencies</span>
+            <span class="p">)</span>
+
+        <span class="n">cluster_id</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_submit_chain</span><span class="p">(</span>
+            <span class="p">[</span>
+                <span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">modify_executable</span><span class="p">,</span> <span class="n">modify_command</span><span class="p">),</span>
+                <span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">executable</span><span class="p">,</span> <span class="n">regenerate_command</span><span class="p">),</span>
+            <span class="p">],</span>
+            <span class="n">dryrun</span><span class="p">,</span>
+            <span class="n">completion_marker</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">_chain_completion_marker</span><span class="p">(),</span>
+        <span class="p">)</span>
+
+        <span class="c1"># As in _submit_subject_analysis_removal: deferred until</span>
+        <span class="c1"># detect_completion() sees the chain's own completion marker,</span>
+        <span class="c1"># rather than applied immediately -- otherwise a chain that fails</span>
+        <span class="c1"># after summarymodify's rename has landed, but before summarypages</span>
+        <span class="c1"># finishes regenerating the pages, would still look complete (the</span>
+        <span class="c1"># renamed label is already present in the metafile either way).</span>
+        <span class="k">if</span> <span class="n">target_resolved</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">production</span><span class="o">.</span><span class="n">meta</span><span class="p">[</span><span class="s2">"pesummary_pending_chain_labels"</span><span class="p">]</span> <span class="o">=</span> <span class="n">target_resolved</span>
+
+        <span class="k">return</span> <span class="n">cluster_id</span></div>
+</div>
 
 </pre></div>
 
