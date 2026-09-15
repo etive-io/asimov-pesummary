@@ -32,11 +32,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   forever, regardless of how long a genuine, correctly labelled
   `posterior_samples.h5` had already existed on disk.
 - `_submit_single_analysis` now raises a clear `PipelineException` when a
-  production's `waveform` meta is missing `approximant`, `minimum
-  frequency`, or `reference frequency`, instead of letting an unguarded
-  dict lookup raise a raw `KeyError` from deep inside `submit_dag`. This
-  matches the validation `_submit_subject_analysis` already performed for
-  each combined analysis.
+  production's `waveform`/`quality` meta is missing `approximant`,
+  `reference frequency`, or `minimum frequency`, instead of letting an
+  unguarded dict lookup raise a raw `KeyError` from deep inside
+  `submit_dag`. This matches the validation `_submit_subject_analysis`
+  already performed for each combined analysis.
+- `--f_low` is now read from `production.meta["quality"]["minimum
+  frequency"]` instead of `production.meta["waveform"]["minimum
+  frequency"]`, in both `_submit_single_analysis` and
+  `_submit_subject_analysis`. `approximant`/`reference frequency` are
+  waveform properties, but the minimum (starting) frequency is a
+  `quality` setting in asimov's schema -- the same place every other
+  asimov pipeline (bilby, lalinference, rift, bayeswave, and asimov
+  core's own previous built-in `pesummary` pipeline) reads it from.
+  `waveform.minimum frequency` was never populated by any of those, so
+  this key was effectively always missing unless a ledger happened to
+  duplicate it there by hand.
 
 ## [0.1.0] - TBD
 

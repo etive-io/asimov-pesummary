@@ -8,6 +8,7 @@ status: ready
 waveform:
   approximant: IMRPhenomD
   reference frequency: 20
+quality:
   minimum frequency:
     H1: 20
     L1: 20

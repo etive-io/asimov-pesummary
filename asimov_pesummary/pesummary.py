@@ -277,13 +277,18 @@ class PESummary(Pipeline):
         label = str(self.production.name)
 
         waveform = self.production.meta.get("waveform", {})
-        if not {"approximant", "minimum frequency", "reference frequency"} <= (
-            waveform.keys()
-        ):
+        if not {"approximant", "reference frequency"} <= waveform.keys():
             raise PipelineException(
                 f"PESummary production {self.production.name} is missing "
-                "waveform configuration (approximant / minimum frequency / "
-                "reference frequency) required to post-process it."
+                "waveform configuration (approximant / reference frequency) "
+                "required to post-process it."
+            )
+        quality = self.production.meta.get("quality", {})
+        if "minimum frequency" not in quality:
+            raise PipelineException(
+                f"PESummary production {self.production.name} is missing "
+                "quality configuration (minimum frequency) required to "
+                "post-process it."
             )
 
         command = ["--webdir", self._webdir(), "--labels", label]
@@ -293,7 +298,7 @@ class PESummary(Pipeline):
 
         command += [
             "--f_low",
-            str(min(waveform["minimum frequency"].values())),
+            str(min(quality["minimum frequency"].values())),
             "--f_ref",
             str(waveform["reference frequency"]),
         ]
@@ -397,20 +402,25 @@ class PESummary(Pipeline):
                 continue
 
             waveform = analysis.meta.get("waveform", {})
-            if not {"approximant", "minimum frequency", "reference frequency"} <= (
-                waveform.keys()
-            ):
+            quality = analysis.meta.get("quality", {})
+            if not {"approximant", "reference frequency"} <= waveform.keys():
                 raise PipelineException(
                     f"PESummary subject analysis {self.production.name}: "
                     f"{analysis.name} is missing waveform configuration "
-                    "(approximant / minimum frequency / reference frequency) "
-                    "required to combine it."
+                    "(approximant / reference frequency) required to "
+                    "combine it."
+                )
+            if "minimum frequency" not in quality:
+                raise PipelineException(
+                    f"PESummary subject analysis {self.production.name}: "
+                    f"{analysis.name} is missing quality configuration "
+                    "(minimum frequency) required to combine it."
                 )
 
             labels.append(analysis.name)
             samples_list.append(samples)
             approximants.append(waveform["approximant"])
-            f_lows.append(str(min(waveform["minimum frequency"].values())))
+            f_lows.append(str(min(quality["minimum frequency"].values())))
             f_refs.append(str(waveform["reference frequency"]))
 
             configfile = analysis.event.repository.find_prods(
