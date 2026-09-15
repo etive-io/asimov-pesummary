@@ -1,6 +1,7 @@
 """Tests for asimov_pesummary.pesummary."""
 
 import os
+import shlex
 import sys
 import unittest
 from unittest.mock import MagicMock, mock_open, patch
@@ -330,6 +331,109 @@ class TestPESummaryDetectCompletion(unittest.TestCase):
 
         self.assertIsNot(
             PESummary.detect_completion, Pipeline.detect_completion
+        )
+
+
+# ---------------------------------------------------------------------------
+# TestPESummaryDetectCompletionPendingChain
+#
+# A remove-only refresh or rename_analysis() defers updating
+# resolved_dependencies until detect_completion() sees the chained job's
+# own completion marker (see _submit_chain's completion_marker) -- since
+# core's detect_completion_processing() only checks that *expected* labels
+# are present, not that anything unexpected is absent, so an untouched,
+# pre-operation metafile could otherwise look "complete" immediately.
+# ---------------------------------------------------------------------------
+
+class TestPESummaryDetectCompletionPendingChain(unittest.TestCase):
+
+    def setUp(self):
+        self.mock_config = patch("asimov_pesummary.pesummary.config").start()
+        self.mock_config.get.side_effect = _config_get
+        self.mock_exists = patch("asimov_pesummary.pesummary.os.path.exists").start()
+        self.addCleanup(patch.stopall)
+
+    def _marker(self, pipeline):
+        return pipeline._chain_completion_marker()
+
+    def test_no_pending_chain_delegates_to_processing_check(self):
+        production = make_subject_analysis(resolved_dependencies=["Bilby1", "Bilby2"])
+        pipeline = PESummary(production)
+        with patch.object(
+            pipeline, "detect_completion_processing", return_value=True
+        ) as mocked:
+            self.assertTrue(pipeline.detect_completion())
+            mocked.assert_called_once()
+
+    def test_pending_chain_marker_absent_returns_false(self):
+        production = make_subject_analysis(resolved_dependencies=["Bilby1", "Bilby2"])
+        production.meta["pesummary_pending_chain_labels"] = ["Bilby1"]
+        pipeline = PESummary(production)
+        self.mock_exists.return_value = False
+        with patch.object(pipeline, "detect_completion_processing") as mocked:
+            self.assertFalse(pipeline.detect_completion())
+            mocked.assert_not_called()
+
+    def test_pending_chain_marker_absent_does_not_touch_resolved_dependencies(self):
+        production = make_subject_analysis(resolved_dependencies=["Bilby1", "Bilby2"])
+        production.meta["pesummary_pending_chain_labels"] = ["Bilby1"]
+        pipeline = PESummary(production)
+        self.mock_exists.return_value = False
+        pipeline.detect_completion()
+        self.assertEqual(production.resolved_dependencies, ["Bilby1", "Bilby2"])
+        self.assertEqual(production.meta["pesummary_pending_chain_labels"], ["Bilby1"])
+
+    def test_pending_chain_marker_present_finalizes_resolved_dependencies(self):
+        production = make_subject_analysis(resolved_dependencies=["Bilby1", "Bilby2"])
+        production.meta["pesummary_pending_chain_labels"] = ["Bilby1"]
+        pipeline = PESummary(production)
+        self.mock_exists.return_value = True
+        with patch.object(
+            pipeline, "detect_completion_processing", return_value=True
+        ):
+            self.assertTrue(pipeline.detect_completion())
+        self.assertEqual(production.resolved_dependencies, ["Bilby1"])
+
+    def test_pending_chain_marker_present_clears_pending_marker(self):
+        production = make_subject_analysis(resolved_dependencies=["Bilby1", "Bilby2"])
+        production.meta["pesummary_pending_chain_labels"] = ["Bilby1"]
+        pipeline = PESummary(production)
+        self.mock_exists.return_value = True
+        with patch.object(pipeline, "detect_completion_processing", return_value=True):
+            pipeline.detect_completion()
+        self.assertNotIn("pesummary_pending_chain_labels", production.meta)
+
+    def test_pending_chain_marker_present_still_defers_to_processing_check(self):
+        # The marker only proves the chain ran; core's own file/HDF5 check
+        # still gets the final say.
+        production = make_subject_analysis(resolved_dependencies=["Bilby1", "Bilby2"])
+        production.meta["pesummary_pending_chain_labels"] = ["Bilby1"]
+        pipeline = PESummary(production)
+        self.mock_exists.return_value = True
+        with patch.object(
+            pipeline, "detect_completion_processing", return_value=False
+        ):
+            self.assertFalse(pipeline.detect_completion())
+
+    def test_non_subject_analysis_ignores_pending_chain_machinery(self):
+        production = make_production()
+        pipeline = PESummary(production)
+        self.mock_exists.return_value = False
+        with patch.object(
+            pipeline, "detect_completion_processing", return_value=True
+        ) as mocked:
+            self.assertTrue(pipeline.detect_completion())
+            mocked.assert_called_once()
+
+    def test_marker_path_is_under_webdir(self):
+        production = make_subject_analysis(resolved_dependencies=["Bilby1", "Bilby2"])
+        pipeline = PESummary(production)
+        self.assertEqual(
+            self._marker(pipeline),
+            os.path.join(
+                "/project", "public_html", "GW150914", "CombinedPESummary",
+                "pesummary", ".pesummary_chain_complete",
+            ),
         )
 
 
@@ -801,6 +905,16 @@ class TestPESummarySubjectAnalysis(unittest.TestCase):
 
         self.addCleanup(patch.stopall)
 
+    def _raw(self, production):
+        """Run submit_dag(dryrun=True) once and return the raw written text
+        (unsplit -- use this when whitespace/quoting inside a token
+        matters). See ``_parts`` for the naively-tokenised counterpart.
+        """
+        pipeline = PESummary(production)
+        pipeline.submit_dag(dryrun=True)
+        handle = self._open.return_value.__enter__.return_value
+        return handle.write.call_args[0][0]
+
     def _parts(self, production):
         """Run submit_dag(dryrun=True) once and return the written command,
         split into tokens. ``submit_dag`` mutates
@@ -809,10 +923,7 @@ class TestPESummarySubjectAnalysis(unittest.TestCase):
         production -- reuse the returned list for every assertion in a
         test rather than calling this again for the same production.
         """
-        pipeline = PESummary(production)
-        pipeline.submit_dag(dryrun=True)
-        handle = self._open.return_value.__enter__.return_value
-        return handle.write.call_args[0][0].split()
+        return self._raw(production).split()
 
     @staticmethod
     def _has(flag, parts):
@@ -1028,14 +1139,66 @@ class TestPESummarySubjectAnalysis(unittest.TestCase):
         )
         self.assertEqual(parts.count(metafile), 2)
 
-    def test_removal_only_sets_resolved_dependencies_to_surviving(self):
+    def test_removal_only_does_not_immediately_shrink_resolved_dependencies(self):
+        # Must not be updated until detect_completion() confirms (via the
+        # chain's completion marker) that the job actually finished --
+        # otherwise the untouched, pre-removal metafile would already
+        # satisfy core's "expected labels present" check on its own.
         self.mock_exists.return_value = True
         production = make_subject_analysis(
             analyses=[make_dependency("Bilby1")],
             resolved_dependencies=["Bilby1", "Bilby2"],
         )
         self._parts(production)
-        self.assertEqual(production.resolved_dependencies, ["Bilby1"])
+        self.assertEqual(production.resolved_dependencies, ["Bilby1", "Bilby2"])
+
+    def test_removal_only_records_pending_chain_labels(self):
+        self.mock_exists.return_value = True
+        production = make_subject_analysis(
+            analyses=[make_dependency("Bilby1")],
+            resolved_dependencies=["Bilby1", "Bilby2"],
+        )
+        self._parts(production)
+        self.assertEqual(
+            production.meta["pesummary_pending_chain_labels"], ["Bilby1"]
+        )
+
+    def test_removal_only_touches_completion_marker_last(self):
+        self.mock_exists.return_value = True
+        parts = self._parts(make_subject_analysis(
+            analyses=[make_dependency("Bilby1")],
+            resolved_dependencies=["Bilby1", "Bilby2"],
+        ))
+        self.assertEqual(parts[-2:], ["touch", "/project/public_html/GW150914/CombinedPESummary/pesummary/.pesummary_chain_complete"])
+
+    def test_removal_only_uses_shell_safe_quoting_for_label_with_space(self):
+        self.mock_exists.return_value = True
+        production = make_subject_analysis(
+            analyses=[make_dependency("Bilby1")],
+            resolved_dependencies=["Bilby1", "Bilby 2"],
+        )
+        written = self._raw(production)
+        # shlex.split must recover the label as one token, not two.
+        tokens = shlex.split(written)
+        self.assertIn("Bilby 2", tokens)
+        self.assertNotIn("Bilby", tokens)
+
+    def test_removal_only_transfers_script_as_relative_argument(self):
+        self.mock_exists.return_value = True
+        production = make_subject_analysis(
+            analyses=[make_dependency("Bilby1")],
+            resolved_dependencies=["Bilby1", "Bilby2"],
+        )
+        pipeline = PESummary(production)
+        mock_scheduler = MagicMock()
+        mock_scheduler.submit.return_value = 42
+        pipeline._scheduler = mock_scheduler
+        pipeline.submit_dag(dryrun=False)
+        job = mock_scheduler.submit.call_args[0][0]
+        desc = job.to_htcondor()
+        self.assertEqual(desc["arguments"], "pesummary.sh")
+        self.assertTrue(desc["transfer_input_files"].endswith("/pesummary.sh"))
+        self.assertTrue(os.path.isabs(desc["transfer_input_files"]))
 
     def test_removal_only_does_not_recollect_assets_for_surviving_analysis(self):
         # Everything needed for the surviving analysis is already in the
@@ -1063,7 +1226,9 @@ class TestPESummarySubjectAnalysis(unittest.TestCase):
                 break
             removed.append(token)
         self.assertEqual(set(removed), {"Bilby2", "Bilby3"})
-        self.assertEqual(production.resolved_dependencies, ["Bilby1"])
+        self.assertEqual(
+            production.meta["pesummary_pending_chain_labels"], ["Bilby1"]
+        )
 
     def test_removal_only_live_submit_uses_scheduler(self):
         self.mock_exists.return_value = True
@@ -1167,11 +1332,20 @@ class TestPESummaryRenameAnalysis(unittest.TestCase):
         self.assertIn("summarypages", joined)
         self.assertLess(joined.index("summarymodify"), joined.index("summarypages"))
 
-    def test_updates_resolved_dependencies(self):
+    def test_does_not_immediately_update_resolved_dependencies(self):
+        # As with removal: deferred until detect_completion() confirms the
+        # chain's completion marker, not applied at submission time.
         production = make_subject_analysis(resolved_dependencies=["Bilby1", "Bilby2"])
         self._run(production)
         self.assertEqual(
-            sorted(production.resolved_dependencies),
+            sorted(production.resolved_dependencies), ["Bilby1", "Bilby2"]
+        )
+
+    def test_records_pending_chain_labels(self):
+        production = make_subject_analysis(resolved_dependencies=["Bilby1", "Bilby2"])
+        self._run(production)
+        self.assertEqual(
+            sorted(production.meta["pesummary_pending_chain_labels"]),
             ["Bilby1_renamed", "Bilby2"],
         )
 
@@ -1179,6 +1353,7 @@ class TestPESummaryRenameAnalysis(unittest.TestCase):
         production = make_subject_analysis(resolved_dependencies=None)
         self._run(production)
         self.assertIsNone(production.resolved_dependencies)
+        self.assertNotIn("pesummary_pending_chain_labels", production.meta)
 
     def test_dryrun_returns_zero(self):
         production = make_subject_analysis(resolved_dependencies=["Bilby1", "Bilby2"])

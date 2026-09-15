@@ -2,6 +2,7 @@
 
 import importlib.resources
 import os
+import shlex
 
 from asimov import utils  # NoQA
 from asimov import config, logger, logging, LOGGER_LEVEL  # NoQA
@@ -169,8 +170,33 @@ class PESummary(Pipeline):
         ``posterior_samples.h5`` exists, is readable, and (for a
         ``SubjectAnalysis``) contains every expected analysis's label as a
         top-level group.
+
+        That check alone is unsound while a removal or rename (see
+        ``_submit_subject_analysis_removal``/``rename_analysis``) is
+        in-flight: it only checks that *expected* labels are present, never
+        that anything unexpected is absent, so an untouched metafile from
+        *before* a removal already satisfies "surviving labels present" --
+        it would look complete before the ``summarymodify``/``summarypages``
+        chain has even run, let alone finished. So when a chained operation
+        is pending (tracked via the ``pesummary_pending_chain_labels`` meta
+        key), this first requires the chain's own completion marker to
+        exist -- proof every step of that script actually ran, not just the
+        first -- before finalising ``resolved_dependencies`` to what the
+        chain was renaming/removing towards and falling through to the
+        normal check above.
         """
+        if self.is_subject_analysis:
+            pending = self.production.meta.get("pesummary_pending_chain_labels")
+            if pending is not None:
+                if not os.path.exists(self._chain_completion_marker()):
+                    return False
+                self.production.resolved_dependencies = pending
+                del self.production.meta["pesummary_pending_chain_labels"]
         return self.detect_completion_processing()
+
+    def _chain_completion_marker(self):
+        """Path touched by ``_submit_chain`` once every step has succeeded."""
+        return os.path.join(self._webdir(), ".pesummary_chain_complete")
 
     def build_dag(self, user=None, dryrun=False):
         """
@@ -276,7 +302,7 @@ class PESummary(Pipeline):
 
         return cluster_id
 
-    def _submit_chain(self, steps, dryrun):
+    def _submit_chain(self, steps, dryrun, completion_marker=None):
         """
         Write a small ``bash -e`` script running an ordered sequence of
         PESummary executables, then submit it as a single HTCondor job
@@ -287,18 +313,46 @@ class PESummary(Pipeline):
         means editing the existing metafile with ``summarymodify`` first,
         then re-rendering the pages from it with ``summarypages``.
 
+        Each step is written with proper shell quoting (``shlex.join``),
+        since a label or path could in principle contain whitespace or
+        shell metacharacters. The script is declared as an HTCondor input
+        file and run by its transferred, job-relative name -- not the
+        submit-side absolute path -- so it (and thus the job) doesn't
+        depend on the execute node sharing a filesystem with the submit
+        host.
+
+        If ``completion_marker`` is given, any existing file at that path
+        is removed synchronously before the job is written/submitted, and
+        the script's final line touches it -- so its existence, checked
+        later by a caller, means every step up to and including the last
+        one actually ran to completion, not just that the first
+        (``summarymodify``) step landed. See ``_submit_subject_analysis_removal``
+        and ``rename_analysis``, which rely on this to avoid declaring the
+        production complete before the chained job has actually finished.
+
         Parameters
         ----------
         steps : list of (str, list of str)
             ``(executable, arguments)`` pairs, run in order.
+        completion_marker : str, optional
+            Path to touch once every step has succeeded.
         """
         lines = ["#!/bin/bash", "set -e"]
-        lines += [f"{executable} " + " ".join(args) for executable, args in steps]
+        lines += [shlex.join([executable, *args]) for executable, args in steps]
+        if completion_marker is not None:
+            lines.append(f"touch {shlex.quote(completion_marker)}")
         script = "\n".join(lines) + "\n"
-        script_path = os.path.join(self.subject.work_dir, "pesummary.sh")
+        script_name = "pesummary.sh"
+        script_path = os.path.join(self.subject.work_dir, script_name)
+
+        if completion_marker is not None and not dryrun:
+            try:
+                os.remove(completion_marker)
+            except FileNotFoundError:
+                pass
 
         with utils.set_directory(self.subject.work_dir):
-            with open("pesummary.sh", "w") as bash_file:
+            with open(script_name, "w") as bash_file:
                 bash_file.write(script)
 
         self.logger.info(f"PE summary command:\n{script}")
@@ -309,12 +363,9 @@ class PESummary(Pipeline):
             print(script)
         self.subject = self.production.event
         submit_description = self._submit_description()
-        # Run via /bin/bash rather than relying on pesummary.sh's own
-        # executable bit, since nothing here guarantees the filesystem
-        # this is written to preserves permissions (e.g. some shared/NFS
-        # mounts, or the mocked filesystem in tests).
         submit_description["executable"] = "/bin/bash"
-        submit_description["arguments"] = script_path
+        submit_description["arguments"] = script_name
+        submit_description["transfer_input_files"] = script_path
 
         if dryrun:
             print("SUBMIT DESCRIPTION")
@@ -594,6 +645,15 @@ class PESummary(Pipeline):
         (ignoring/warning on any ``--labels`` passed alongside a metafile
         input), so the surviving analyses are picked up automatically once
         the removed ones are gone from the file.
+
+        ``resolved_dependencies`` isn't shrunk to the surviving set until
+        ``detect_completion()`` confirms the chain actually finished (see
+        ``_submit_chain``'s ``completion_marker``): core's
+        ``detect_completion_processing()`` only checks that *expected*
+        labels are present, not that removed ones are gone, so the
+        untouched, pre-removal metafile would otherwise already satisfy
+        "surviving labels present" -- making the production look complete
+        before the job has even run.
         """
         metafile = self.results()["metafile"]
         if not os.path.exists(metafile):
@@ -610,8 +670,9 @@ class PESummary(Pipeline):
             "--overwrite",
         ]
         regenerate_command = ["--webdir", webdir, "--samples", metafile, "--gw"]
-        if "multiprocess" in self.meta:
-            regenerate_command += ["--multi_process", str(self.meta["multiprocess"])]
+        self._append_shared_options(regenerate_command)
+
+        surviving = sorted(set(self.production.resolved_dependencies) - set(removed))
 
         cluster_id = self._submit_chain(
             [
@@ -619,11 +680,10 @@ class PESummary(Pipeline):
                 (self.executable, regenerate_command),
             ],
             dryrun,
+            completion_marker=self._chain_completion_marker(),
         )
 
-        self.production.resolved_dependencies = sorted(
-            set(self.production.resolved_dependencies) - set(removed)
-        )
+        self.production.meta["pesummary_pending_chain_labels"] = surviving
 
         return cluster_id
 
@@ -672,8 +732,14 @@ class PESummary(Pipeline):
             "--overwrite",
         ]
         regenerate_command = ["--webdir", webdir, "--samples", metafile, "--gw"]
-        if "multiprocess" in self.meta:
-            regenerate_command += ["--multi_process", str(self.meta["multiprocess"])]
+        self._append_shared_options(regenerate_command)
+
+        target_resolved = None
+        if self.production.resolved_dependencies is not None:
+            target_resolved = sorted(
+                new_label if name == old_label else name
+                for name in self.production.resolved_dependencies
+            )
 
         cluster_id = self._submit_chain(
             [
@@ -681,12 +747,16 @@ class PESummary(Pipeline):
                 (self.executable, regenerate_command),
             ],
             dryrun,
+            completion_marker=self._chain_completion_marker(),
         )
 
-        if self.production.resolved_dependencies is not None:
-            self.production.resolved_dependencies = sorted(
-                new_label if name == old_label else name
-                for name in self.production.resolved_dependencies
-            )
+        # As in _submit_subject_analysis_removal: deferred until
+        # detect_completion() sees the chain's own completion marker,
+        # rather than applied immediately -- otherwise a chain that fails
+        # after summarymodify's rename has landed, but before summarypages
+        # finishes regenerating the pages, would still look complete (the
+        # renamed label is already present in the metafile either way).
+        if target_resolved is not None:
+            self.production.meta["pesummary_pending_chain_labels"] = target_resolved
 
         return cluster_id
