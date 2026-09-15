@@ -554,24 +554,36 @@
         <span class="p">)[</span><span class="mi">0</span><span class="p">]</span>
         <span class="n">label</span> <span class="o">=</span> <span class="nb">str</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">production</span><span class="o">.</span><span class="n">name</span><span class="p">)</span>
 
+        <span class="n">waveform</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">production</span><span class="o">.</span><span class="n">meta</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"waveform"</span><span class="p">,</span> <span class="p">{})</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="p">{</span><span class="s2">"approximant"</span><span class="p">,</span> <span class="s2">"reference frequency"</span><span class="p">}</span> <span class="o">&lt;=</span> <span class="n">waveform</span><span class="o">.</span><span class="n">keys</span><span class="p">():</span>
+            <span class="k">raise</span> <span class="n">PipelineException</span><span class="p">(</span>
+                <span class="sa">f</span><span class="s2">"PESummary production </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">production</span><span class="o">.</span><span class="n">name</span><span class="si">}</span><span class="s2"> is missing "</span>
+                <span class="s2">"waveform configuration (approximant / reference frequency) "</span>
+                <span class="s2">"required to post-process it."</span>
+            <span class="p">)</span>
+        <span class="n">likelihood</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">production</span><span class="o">.</span><span class="n">meta</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"likelihood"</span><span class="p">,</span> <span class="p">{})</span>
+        <span class="k">if</span> <span class="s2">"minimum frequency"</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">likelihood</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="n">PipelineException</span><span class="p">(</span>
+                <span class="sa">f</span><span class="s2">"PESummary production </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">production</span><span class="o">.</span><span class="n">name</span><span class="si">}</span><span class="s2"> is missing "</span>
+                <span class="s2">"likelihood configuration (minimum frequency) required to "</span>
+                <span class="s2">"post-process it."</span>
+            <span class="p">)</span>
+
         <span class="n">command</span> <span class="o">=</span> <span class="p">[</span><span class="s2">"--webdir"</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">_webdir</span><span class="p">(),</span> <span class="s2">"--labels"</span><span class="p">,</span> <span class="n">label</span><span class="p">]</span>
 
         <span class="n">command</span> <span class="o">+=</span> <span class="p">[</span><span class="s2">"--gw"</span><span class="p">]</span>
-        <span class="n">command</span> <span class="o">+=</span> <span class="p">[</span>
-            <span class="s2">"--approximant"</span><span class="p">,</span>
-            <span class="bp">self</span><span class="o">.</span><span class="n">production</span><span class="o">.</span><span class="n">meta</span><span class="p">[</span><span class="s2">"waveform"</span><span class="p">][</span><span class="s2">"approximant"</span><span class="p">],</span>
-        <span class="p">]</span>
+        <span class="n">command</span> <span class="o">+=</span> <span class="p">[</span><span class="s2">"--approximant"</span><span class="p">,</span> <span class="n">waveform</span><span class="p">[</span><span class="s2">"approximant"</span><span class="p">]]</span>
 
         <span class="n">command</span> <span class="o">+=</span> <span class="p">[</span>
             <span class="s2">"--f_low"</span><span class="p">,</span>
-            <span class="nb">str</span><span class="p">(</span><span class="nb">min</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">production</span><span class="o">.</span><span class="n">meta</span><span class="p">[</span><span class="s2">"waveform"</span><span class="p">][</span><span class="s2">"minimum frequency"</span><span class="p">]</span><span class="o">.</span><span class="n">values</span><span class="p">())),</span>
+            <span class="nb">str</span><span class="p">(</span><span class="nb">min</span><span class="p">(</span><span class="n">likelihood</span><span class="p">[</span><span class="s2">"minimum frequency"</span><span class="p">]</span><span class="o">.</span><span class="n">values</span><span class="p">())),</span>
             <span class="s2">"--f_ref"</span><span class="p">,</span>
-            <span class="nb">str</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">production</span><span class="o">.</span><span class="n">meta</span><span class="p">[</span><span class="s2">"waveform"</span><span class="p">][</span><span class="s2">"reference frequency"</span><span class="p">]),</span>
+            <span class="nb">str</span><span class="p">(</span><span class="n">waveform</span><span class="p">[</span><span class="s2">"reference frequency"</span><span class="p">]),</span>
         <span class="p">]</span>
 
         <span class="bp">self</span><span class="o">.</span><span class="n">_append_shared_options</span><span class="p">(</span><span class="n">command</span><span class="p">)</span>
 
-        <span class="k">if</span> <span class="s2">"nrsur"</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">production</span><span class="o">.</span><span class="n">meta</span><span class="p">[</span><span class="s2">"waveform"</span><span class="p">][</span><span class="s2">"approximant"</span><span class="p">]</span><span class="o">.</span><span class="n">lower</span><span class="p">():</span>
+        <span class="k">if</span> <span class="s2">"nrsur"</span> <span class="ow">in</span> <span class="n">waveform</span><span class="p">[</span><span class="s2">"approximant"</span><span class="p">]</span><span class="o">.</span><span class="n">lower</span><span class="p">():</span>
             <span class="n">command</span> <span class="o">+=</span> <span class="p">[</span><span class="s2">"--NRSur_fits"</span><span class="p">]</span>
 
         <span class="c1"># Config file</span>
@@ -668,20 +680,25 @@
                 <span class="k">continue</span>
 
             <span class="n">waveform</span> <span class="o">=</span> <span class="n">analysis</span><span class="o">.</span><span class="n">meta</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"waveform"</span><span class="p">,</span> <span class="p">{})</span>
-            <span class="k">if</span> <span class="ow">not</span> <span class="p">{</span><span class="s2">"approximant"</span><span class="p">,</span> <span class="s2">"minimum frequency"</span><span class="p">,</span> <span class="s2">"reference frequency"</span><span class="p">}</span> <span class="o">&lt;=</span> <span class="p">(</span>
-                <span class="n">waveform</span><span class="o">.</span><span class="n">keys</span><span class="p">()</span>
-            <span class="p">):</span>
+            <span class="n">likelihood</span> <span class="o">=</span> <span class="n">analysis</span><span class="o">.</span><span class="n">meta</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"likelihood"</span><span class="p">,</span> <span class="p">{})</span>
+            <span class="k">if</span> <span class="ow">not</span> <span class="p">{</span><span class="s2">"approximant"</span><span class="p">,</span> <span class="s2">"reference frequency"</span><span class="p">}</span> <span class="o">&lt;=</span> <span class="n">waveform</span><span class="o">.</span><span class="n">keys</span><span class="p">():</span>
                 <span class="k">raise</span> <span class="n">PipelineException</span><span class="p">(</span>
                     <span class="sa">f</span><span class="s2">"PESummary subject analysis </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">production</span><span class="o">.</span><span class="n">name</span><span class="si">}</span><span class="s2">: "</span>
                     <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">analysis</span><span class="o">.</span><span class="n">name</span><span class="si">}</span><span class="s2"> is missing waveform configuration "</span>
-                    <span class="s2">"(approximant / minimum frequency / reference frequency) "</span>
-                    <span class="s2">"required to combine it."</span>
+                    <span class="s2">"(approximant / reference frequency) required to "</span>
+                    <span class="s2">"combine it."</span>
+                <span class="p">)</span>
+            <span class="k">if</span> <span class="s2">"minimum frequency"</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">likelihood</span><span class="p">:</span>
+                <span class="k">raise</span> <span class="n">PipelineException</span><span class="p">(</span>
+                    <span class="sa">f</span><span class="s2">"PESummary subject analysis </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">production</span><span class="o">.</span><span class="n">name</span><span class="si">}</span><span class="s2">: "</span>
+                    <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">analysis</span><span class="o">.</span><span class="n">name</span><span class="si">}</span><span class="s2"> is missing likelihood configuration "</span>
+                    <span class="s2">"(minimum frequency) required to combine it."</span>
                 <span class="p">)</span>
 
             <span class="n">labels</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">analysis</span><span class="o">.</span><span class="n">name</span><span class="p">)</span>
             <span class="n">samples_list</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">samples</span><span class="p">)</span>
             <span class="n">approximants</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">waveform</span><span class="p">[</span><span class="s2">"approximant"</span><span class="p">])</span>
-            <span class="n">f_lows</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="nb">str</span><span class="p">(</span><span class="nb">min</span><span class="p">(</span><span class="n">waveform</span><span class="p">[</span><span class="s2">"minimum frequency"</span><span class="p">]</span><span class="o">.</span><span class="n">values</span><span class="p">())))</span>
+            <span class="n">f_lows</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="nb">str</span><span class="p">(</span><span class="nb">min</span><span class="p">(</span><span class="n">likelihood</span><span class="p">[</span><span class="s2">"minimum frequency"</span><span class="p">]</span><span class="o">.</span><span class="n">values</span><span class="p">())))</span>
             <span class="n">f_refs</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="nb">str</span><span class="p">(</span><span class="n">waveform</span><span class="p">[</span><span class="s2">"reference frequency"</span><span class="p">]))</span>
 
             <span class="n">configfile</span> <span class="o">=</span> <span class="n">analysis</span><span class="o">.</span><span class="n">event</span><span class="o">.</span><span class="n">repository</span><span class="o">.</span><span class="n">find_prods</span><span class="p">(</span>
