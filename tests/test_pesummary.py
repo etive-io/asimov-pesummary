@@ -449,6 +449,18 @@ class TestPESummarySubmitDagCommand(unittest.TestCase):
         with self.assertRaises(PipelineException):
             self._run(production)
 
+    def test_missing_waveform_meta_raises_pipeline_exception(self):
+        production = make_production()
+        del production.meta["waveform"]["approximant"]
+        with self.assertRaises(PipelineException):
+            self._run(production)
+
+    def test_missing_waveform_meta_entirely_raises_pipeline_exception(self):
+        production = make_production()
+        del production.meta["waveform"]
+        with self.assertRaises(PipelineException):
+            self._run(production)
+
     # --- Multiprocess ---
 
     def test_multiprocess_flag_present(self):

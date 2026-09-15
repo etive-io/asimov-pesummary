@@ -276,24 +276,31 @@ class PESummary(Pipeline):
         )[0]
         label = str(self.production.name)
 
+        waveform = self.production.meta.get("waveform", {})
+        if not {"approximant", "minimum frequency", "reference frequency"} <= (
+            waveform.keys()
+        ):
+            raise PipelineException(
+                f"PESummary production {self.production.name} is missing "
+                "waveform configuration (approximant / minimum frequency / "
+                "reference frequency) required to post-process it."
+            )
+
         command = ["--webdir", self._webdir(), "--labels", label]
 
         command += ["--gw"]
-        command += [
-            "--approximant",
-            self.production.meta["waveform"]["approximant"],
-        ]
+        command += ["--approximant", waveform["approximant"]]
 
         command += [
             "--f_low",
-            str(min(self.production.meta["waveform"]["minimum frequency"].values())),
+            str(min(waveform["minimum frequency"].values())),
             "--f_ref",
-            str(self.production.meta["waveform"]["reference frequency"]),
+            str(waveform["reference frequency"]),
         ]
 
         self._append_shared_options(command)
 
-        if "nrsur" in self.production.meta["waveform"]["approximant"].lower():
+        if "nrsur" in waveform["approximant"].lower():
             command += ["--NRSur_fits"]
 
         # Config file

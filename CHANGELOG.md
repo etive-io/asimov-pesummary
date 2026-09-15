@@ -31,6 +31,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   had actually finished -- it repeated "is stuck; attempting a rescue"
   forever, regardless of how long a genuine, correctly labelled
   `posterior_samples.h5` had already existed on disk.
+- `_submit_single_analysis` now raises a clear `PipelineException` when a
+  production's `waveform` meta is missing `approximant`, `minimum
+  frequency`, or `reference frequency`, instead of letting an unguarded
+  dict lookup raise a raw `KeyError` from deep inside `submit_dag`. This
+  matches the validation `_submit_subject_analysis` already performed for
+  each combined analysis.
 
 ## [0.1.0] - TBD
 
