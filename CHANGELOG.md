@@ -8,6 +8,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `SubjectAnalysis` refreshes that only remove analyses (nothing added) now
+  strip the removed labels out of the existing metafile directly with
+  `summarymodify --remove_label` and regenerate the pages from it, instead
+  of falling back to a full rebuild of every remaining analysis. (#3)
+- `PESummary.rename_analysis()`: explicitly rename a stored analysis in an
+  already-published combined metafile via `summarymodify`, without
+  triggering a re-run. Not wired into the automatic refresh cycle, since a
+  before/after diff of resolved dependency names can't distinguish a
+  rename from an unrelated removal and addition. (#3)
 - Initial release of asimov-pesummary plugin
 - PESummary pipeline integration for Asimov 0.7+
 - Post-processing and visualization capabilities

@@ -962,17 +962,228 @@ class TestPESummarySubjectAnalysis(unittest.TestCase):
         labels = self._values_after("--labels", 3, parts)
         self.assertEqual(set(labels), {"Bilby1", "Bilby2", "Bilby3"})
 
-    # --- Removal fallback ---
+    # --- Removal-only refresh (surgical: summarymodify + regenerate) ---
 
-    def test_removed_analysis_falls_back_to_full_rebuild(self):
+    def test_removal_only_does_not_add_to_existing(self):
         self.mock_exists.return_value = True
         parts = self._parts(make_subject_analysis(
             analyses=[make_dependency("Bilby1")],
             resolved_dependencies=["Bilby1", "Bilby2"],  # Bilby2 no longer present
         ))
         self.assertFalse(self._has("--add_to_existing", parts))
-        labels = self._values_after("--labels", 1, parts)
-        self.assertEqual(labels, ["Bilby1"])
+
+    def test_removal_only_does_not_recombine_from_scratch(self):
+        # No raw per-analysis recombination flags -- this isn't a full
+        # rebuild, so none of the single-analysis-derived flags appear.
+        self.mock_exists.return_value = True
+        parts = self._parts(make_subject_analysis(
+            analyses=[make_dependency("Bilby1")],
+            resolved_dependencies=["Bilby1", "Bilby2"],
+        ))
+        self.assertFalse(self._has("--approximant", parts))
+        self.assertFalse(self._has("--config", parts))
+        self.assertFalse(self._has("--f_low", parts))
+
+    def test_removal_only_uses_summarymodify_and_summarypages_in_order(self):
+        self.mock_exists.return_value = True
+        parts = self._parts(make_subject_analysis(
+            analyses=[make_dependency("Bilby1")],
+            resolved_dependencies=["Bilby1", "Bilby2"],
+        ))
+        joined = " ".join(parts)
+        self.assertIn("summarymodify", joined)
+        self.assertIn("summarypages", joined)
+        self.assertLess(joined.index("summarymodify"), joined.index("summarypages"))
+
+    def test_removal_only_removes_correct_label(self):
+        self.mock_exists.return_value = True
+        parts = self._parts(make_subject_analysis(
+            analyses=[make_dependency("Bilby1")],
+            resolved_dependencies=["Bilby1", "Bilby2"],
+        ))
+        self.assertTrue(self._has("--remove_label", parts))
+        self.assertEqual(
+            parts[parts.index("--remove_label") + 1], "Bilby2"
+        )
+
+    def test_removal_only_overwrites_metafile_in_place(self):
+        self.mock_exists.return_value = True
+        parts = self._parts(make_subject_analysis(
+            analyses=[make_dependency("Bilby1")],
+            resolved_dependencies=["Bilby1", "Bilby2"],
+        ))
+        self.assertTrue(self._has("--overwrite", parts))
+
+    def test_removal_only_passes_existing_metafile_as_samples(self):
+        self.mock_exists.return_value = True
+        parts = self._parts(make_subject_analysis(
+            analyses=[make_dependency("Bilby1")],
+            resolved_dependencies=["Bilby1", "Bilby2"],
+        ))
+        # Both the summarymodify and summarypages steps operate on the
+        # one existing (metafile) -- not any raw per-analysis result file.
+        metafile = os.path.join(
+            "/project", "public_html", "GW150914", "CombinedPESummary",
+            "pesummary", "samples", "posterior_samples.h5",
+        )
+        self.assertEqual(parts.count(metafile), 2)
+
+    def test_removal_only_sets_resolved_dependencies_to_surviving(self):
+        self.mock_exists.return_value = True
+        production = make_subject_analysis(
+            analyses=[make_dependency("Bilby1")],
+            resolved_dependencies=["Bilby1", "Bilby2"],
+        )
+        self._parts(production)
+        self.assertEqual(production.resolved_dependencies, ["Bilby1"])
+
+    def test_removal_only_does_not_recollect_assets_for_surviving_analysis(self):
+        # Everything needed for the surviving analysis is already in the
+        # metafile -- its own pipeline should never be consulted.
+        self.mock_exists.return_value = True
+        surviving = make_dependency("Bilby1")
+        production = make_subject_analysis(
+            analyses=[surviving],
+            resolved_dependencies=["Bilby1", "Bilby2"],
+        )
+        self._parts(production)
+        surviving.pipeline.collect_assets.assert_not_called()
+
+    def test_removal_of_multiple_analyses_at_once(self):
+        self.mock_exists.return_value = True
+        production = make_subject_analysis(
+            analyses=[make_dependency("Bilby1")],
+            resolved_dependencies=["Bilby1", "Bilby2", "Bilby3"],
+        )
+        parts = self._parts(production)
+        i = parts.index("--remove_label")
+        removed = []
+        for token in parts[i + 1:]:
+            if token.startswith("--"):
+                break
+            removed.append(token)
+        self.assertEqual(set(removed), {"Bilby2", "Bilby3"})
+        self.assertEqual(production.resolved_dependencies, ["Bilby1"])
+
+    def test_removal_only_live_submit_uses_scheduler(self):
+        self.mock_exists.return_value = True
+        production = make_subject_analysis(
+            analyses=[make_dependency("Bilby1")],
+            resolved_dependencies=["Bilby1", "Bilby2"],
+        )
+        pipeline = PESummary(production)
+        mock_scheduler = MagicMock()
+        mock_scheduler.submit.return_value = 42
+        pipeline._scheduler = mock_scheduler
+        result = pipeline.submit_dag(dryrun=False)
+        mock_scheduler.submit.assert_called_once()
+        self.assertEqual(result, 42)
+        job = mock_scheduler.submit.call_args[0][0]
+        desc = job.to_htcondor()
+        self.assertEqual(desc["executable"], "/bin/bash")
+        self.assertIn("pesummary.sh", desc["arguments"])
+
+    def test_removal_only_missing_metafile_raises(self):
+        # home.html exists (so this is recognised as a removal-only
+        # refresh), but the metafile itself is missing.
+        self.mock_exists.side_effect = lambda path: path.endswith("home.html")
+        production = make_subject_analysis(
+            analyses=[make_dependency("Bilby1")],
+            resolved_dependencies=["Bilby1", "Bilby2"],
+        )
+        pipeline = PESummary(production)
+        with self.assertRaises(PipelineException):
+            pipeline.submit_dag(dryrun=True)
+
+    # --- Mixed add+remove still falls back to a full rebuild ---
+
+    def test_mixed_add_and_remove_falls_back_to_full_rebuild(self):
+        self.mock_exists.return_value = True
+        parts = self._parts(make_subject_analysis(
+            analyses=[make_dependency("Bilby1"), make_dependency("Bilby3")],
+            resolved_dependencies=["Bilby1", "Bilby2"],  # Bilby2 gone, Bilby3 new
+        ))
+        self.assertFalse(self._has("--add_to_existing", parts))
+        self.assertFalse(self._has("--remove_label", parts))
+        labels = self._values_after("--labels", 2, parts)
+        self.assertEqual(set(labels), {"Bilby1", "Bilby3"})
+
+
+# ---------------------------------------------------------------------------
+# TestPESummaryRenameAnalysis
+# ---------------------------------------------------------------------------
+
+class TestPESummaryRenameAnalysis(unittest.TestCase):
+
+    def setUp(self):
+        self.mock_config = patch("asimov_pesummary.pesummary.config").start()
+        self.mock_config.get.side_effect = _config_get
+
+        self.mock_utils = patch("asimov_pesummary.pesummary.utils").start()
+
+        self.mock_exists = patch("asimov_pesummary.pesummary.os.path.exists").start()
+        self.mock_exists.return_value = True
+
+        self._open = mock_open()
+        patch("builtins.open", self._open).start()
+
+        self.addCleanup(patch.stopall)
+
+    def _run(self, production, old="Bilby1", new="Bilby1_renamed"):
+        pipeline = PESummary(production)
+        result = pipeline.rename_analysis(old, new, dryrun=True)
+        handle = self._open.return_value.__enter__.return_value
+        parts = handle.write.call_args[0][0].split()
+        return parts, result
+
+    def test_raises_for_non_subject_analysis(self):
+        production = make_production()
+        pipeline = PESummary(production)
+        with self.assertRaises(PipelineException):
+            pipeline.rename_analysis("Prod0", "Prod0_renamed", dryrun=True)
+
+    def test_raises_if_metafile_missing(self):
+        self.mock_exists.return_value = False
+        production = make_subject_analysis(resolved_dependencies=["Bilby1", "Bilby2"])
+        pipeline = PESummary(production)
+        with self.assertRaises(PipelineException):
+            pipeline.rename_analysis("Bilby1", "Bilby1_renamed", dryrun=True)
+
+    def test_uses_summarymodify_labels_syntax(self):
+        production = make_subject_analysis(resolved_dependencies=["Bilby1", "Bilby2"])
+        parts, _ = self._run(production)
+        self.assertIn("Bilby1:Bilby1_renamed", parts)
+
+    def test_overwrites_metafile_in_place(self):
+        production = make_subject_analysis(resolved_dependencies=["Bilby1", "Bilby2"])
+        parts, _ = self._run(production)
+        self.assertIn("--overwrite", parts)
+
+    def test_uses_summarymodify_then_summarypages(self):
+        production = make_subject_analysis(resolved_dependencies=["Bilby1", "Bilby2"])
+        parts, _ = self._run(production)
+        joined = " ".join(parts)
+        self.assertIn("summarymodify", joined)
+        self.assertIn("summarypages", joined)
+        self.assertLess(joined.index("summarymodify"), joined.index("summarypages"))
+
+    def test_updates_resolved_dependencies(self):
+        production = make_subject_analysis(resolved_dependencies=["Bilby1", "Bilby2"])
+        self._run(production)
+        self.assertEqual(
+            sorted(production.resolved_dependencies),
+            ["Bilby1_renamed", "Bilby2"],
+        )
+
+    def test_resolved_dependencies_none_stays_none(self):
+        production = make_subject_analysis(resolved_dependencies=None)
+        self._run(production)
+        self.assertIsNone(production.resolved_dependencies)
+
+    def test_dryrun_returns_zero(self):
+        production = make_subject_analysis(resolved_dependencies=["Bilby1", "Bilby2"])
+        _, result = self._run(production)
+        self.assertEqual(result, 0)
 
 
 if __name__ == "__main__":
