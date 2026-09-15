@@ -2,6 +2,7 @@
 
 import importlib.resources
 import os
+import shlex
 
 from asimov import utils  # NoQA
 from asimov import config, logger, logging, LOGGER_LEVEL  # NoQA
@@ -21,17 +22,37 @@ class PESummary(Pipeline):
     ``SubjectAnalysis`` (combining several productions' samples into one set
     of summary pages). ``SubjectAnalysis`` productions marked ``refreshable:
     true`` are automatically resubmitted by asimov's monitor loop whenever
-    their resolved source analyses change; when that happens here, only the
-    newly-added analyses are passed to ``summarypages``, using its own
-    ``--add_to_existing``/``--existing_webdir`` flags to append them to the
-    already-published pages rather than recombining everything from
-    scratch. If an analysis is ever removed from the combined set,
-    ``summarypages`` cannot retract a label from an existing page in place,
-    so a full rebuild is triggered instead.
+    their resolved source analyses change; when that happens here, one of
+    three things is submitted depending on how the resolved set changed
+    since the last run:
+
+    - analyses added only: the newly-added analyses are passed to
+      ``summarypages``, using its own ``--add_to_existing``/
+      ``--existing_webdir`` flags to append them to the already-published
+      pages rather than recombining everything from scratch;
+    - analyses removed only (nothing added): ``summarypages`` has no way to
+      retract a label from an existing page in place, so instead
+      ``summarymodify --remove_label`` strips the removed analyses out of
+      the existing metafile directly, and ``summarypages`` is re-run
+      against that trimmed metafile to regenerate the pages -- cheap, since
+      none of the surviving analyses' posteriors need recomputing;
+    - anything else (a mix of additions and removals, the first run, or a
+      previous page that's gone missing on disk): a full rebuild is
+      triggered, recombining every currently-resolved analysis from
+      scratch.
+
+    ``rename_analysis()`` exposes a related ``summarymodify`` operation
+    (renaming a stored label) directly, for callers to invoke explicitly --
+    it isn't wired into the automatic refresh above, since a before/after
+    diff of resolved dependency names alone can't distinguish "renamed"
+    from "removed one, added an unrelated one".
     """
 
     executable = os.path.join(
         config.get("pipelines", "environment"), "bin", "summarypages"
+    )
+    modify_executable = os.path.join(
+        config.get("pipelines", "environment"), "bin", "summarymodify"
     )
     name = "PESummary"
 
@@ -149,8 +170,33 @@ class PESummary(Pipeline):
         ``posterior_samples.h5`` exists, is readable, and (for a
         ``SubjectAnalysis``) contains every expected analysis's label as a
         top-level group.
+
+        That check alone is unsound while a removal or rename (see
+        ``_submit_subject_analysis_removal``/``rename_analysis``) is
+        in-flight: it only checks that *expected* labels are present, never
+        that anything unexpected is absent, so an untouched metafile from
+        *before* a removal already satisfies "surviving labels present" --
+        it would look complete before the ``summarymodify``/``summarypages``
+        chain has even run, let alone finished. So when a chained operation
+        is pending (tracked via the ``pesummary_pending_chain_labels`` meta
+        key), this first requires the chain's own completion marker to
+        exist -- proof every step of that script actually ran, not just the
+        first -- before finalising ``resolved_dependencies`` to what the
+        chain was renaming/removing towards and falling through to the
+        normal check above.
         """
+        if self.is_subject_analysis:
+            pending = self.production.meta.get("pesummary_pending_chain_labels")
+            if pending is not None:
+                if not os.path.exists(self._chain_completion_marker()):
+                    return False
+                self.production.resolved_dependencies = pending
+                del self.production.meta["pesummary_pending_chain_labels"]
         return self.detect_completion_processing()
+
+    def _chain_completion_marker(self):
+        """Path touched by ``_submit_chain`` once every step has succeeded."""
+        return os.path.join(self._webdir(), ".pesummary_chain_complete")
 
     def build_dag(self, user=None, dryrun=False):
         """
@@ -195,11 +241,36 @@ class PESummary(Pipeline):
             if "precessing snr" in self.meta["calculate"]:
                 command += ["--calculate_precessing_snr"]
 
+    def _submit_description(self):
+        """
+        Build the HTCondor submit description fields shared by every
+        PESummary job, regardless of whether it runs a single
+        ``summarypages`` command or a chained ``summarymodify`` +
+        ``summarypages`` script. Caller fills in ``executable`` and
+        ``arguments``.
+        """
+        submit_description = {
+            "output": f"{self.subject.work_dir}/pesummary.out",
+            "error": f"{self.subject.work_dir}/pesummary.err",
+            "log": f"{self.subject.work_dir}/pesummary.log",
+            "request_cpus": self.meta["multiprocess"],
+            "getenv": "true",
+            "batch_name": f"Summary Pages/{self.subject.name}/{self.production.name}",
+            "request_memory": "8192MB",
+            "should_transfer_files": "YES",
+            "request_disk": "8192MB",
+        }
+        if "accounting group" in self.meta:
+            submit_description["accounting_group_user"] = config.get("condor", "user")
+            submit_description["accounting_group"] = self.meta["accounting group"]
+        return submit_description
+
     def _submit(self, command, dryrun):
         """
         Write the job script, build the submit description, and submit (or,
-        if ``dryrun``, just print what would happen). Shared by both the
-        single-analysis and subject-analysis submission paths.
+        if ``dryrun``, just print what would happen). Used for a plain,
+        single ``summarypages`` invocation -- both the single-analysis path
+        and the subject-analysis add/full-rebuild paths.
         """
         with utils.set_directory(self.subject.work_dir):
             with open("pesummary.sh", "w") as bash_file:
@@ -214,22 +285,87 @@ class PESummary(Pipeline):
             print("-----------------")
             print(" ".join(command))
         self.subject = self.production.event
-        submit_description = {
-            "executable": self.executable,
-            "arguments": " ".join(command),
-            "output": f"{self.subject.work_dir}/pesummary.out",
-            "error": f"{self.subject.work_dir}/pesummary.err",
-            "log": f"{self.subject.work_dir}/pesummary.log",
-            "request_cpus": self.meta["multiprocess"],
-            "getenv": "true",
-            "batch_name": f"Summary Pages/{self.subject.name}/{self.production.name}",
-            "request_memory": "8192MB",
-            "should_transfer_files": "YES",
-            "request_disk": "8192MB",
-        }
-        if "accounting group" in self.meta:
-            submit_description["accounting_group_user"] = config.get("condor", "user")
-            submit_description["accounting_group"] = self.meta["accounting group"]
+        submit_description = self._submit_description()
+        submit_description["executable"] = self.executable
+        submit_description["arguments"] = " ".join(command)
+
+        if dryrun:
+            print("SUBMIT DESCRIPTION")
+            print("------------------")
+            print(submit_description)
+
+        if not dryrun:
+            job = create_job_from_dict(submit_description)
+            cluster_id = self.scheduler.submit(job)
+        else:
+            cluster_id = 0
+
+        return cluster_id
+
+    def _submit_chain(self, steps, dryrun, completion_marker=None):
+        """
+        Write a small ``bash -e`` script running an ordered sequence of
+        PESummary executables, then submit it as a single HTCondor job
+        (stopping at the first failing step).
+
+        Used where one ``summarypages`` invocation isn't enough: removing
+        or renaming an analysis in an already-published combined page
+        means editing the existing metafile with ``summarymodify`` first,
+        then re-rendering the pages from it with ``summarypages``.
+
+        Each step is written with proper shell quoting (``shlex.join``),
+        since a label or path could in principle contain whitespace or
+        shell metacharacters. The script is declared as an HTCondor input
+        file and run by its transferred, job-relative name -- not the
+        submit-side absolute path -- so it (and thus the job) doesn't
+        depend on the execute node sharing a filesystem with the submit
+        host.
+
+        If ``completion_marker`` is given, any existing file at that path
+        is removed synchronously before the job is written/submitted, and
+        the script's final line touches it -- so its existence, checked
+        later by a caller, means every step up to and including the last
+        one actually ran to completion, not just that the first
+        (``summarymodify``) step landed. See ``_submit_subject_analysis_removal``
+        and ``rename_analysis``, which rely on this to avoid declaring the
+        production complete before the chained job has actually finished.
+
+        Parameters
+        ----------
+        steps : list of (str, list of str)
+            ``(executable, arguments)`` pairs, run in order.
+        completion_marker : str, optional
+            Path to touch once every step has succeeded.
+        """
+        lines = ["#!/bin/bash", "set -e"]
+        lines += [shlex.join([executable, *args]) for executable, args in steps]
+        if completion_marker is not None:
+            lines.append(f"touch {shlex.quote(completion_marker)}")
+        script = "\n".join(lines) + "\n"
+        script_name = "pesummary.sh"
+        script_path = os.path.join(self.subject.work_dir, script_name)
+
+        if completion_marker is not None and not dryrun:
+            try:
+                os.remove(completion_marker)
+            except FileNotFoundError:
+                pass
+
+        with utils.set_directory(self.subject.work_dir):
+            with open(script_name, "w") as bash_file:
+                bash_file.write(script)
+
+        self.logger.info(f"PE summary command:\n{script}")
+
+        if dryrun:
+            print("PESUMMARY COMMAND")
+            print("-----------------")
+            print(script)
+        self.subject = self.production.event
+        submit_description = self._submit_description()
+        submit_description["executable"] = "/bin/bash"
+        submit_description["arguments"] = script_name
+        submit_description["transfer_input_files"] = script_path
 
         if dryrun:
             print("SUBMIT DESCRIPTION")
@@ -354,12 +490,9 @@ class PESummary(Pipeline):
         """
         Run PESummary on the combined results of several source analyses.
 
-        On the first run (or if an analysis has been removed from the
-        resolved set since the last run), every resolved source analysis is
-        submitted together. On a later refresh that only adds analyses to
-        an already-published page, just the new analyses are submitted,
-        using ``summarypages --add_to_existing`` to append them in place
-        rather than recombining everything from scratch.
+        See the class docstring for how the first run, an add-only
+        refresh, a remove-only refresh, and everything else are each
+        handled differently.
         """
         source_analyses = list(self.production.analyses)
         if not source_analyses:
@@ -371,13 +504,32 @@ class PESummary(Pipeline):
         current_names = sorted(analysis.name for analysis in source_analyses)
         previous_names = self.production.resolved_dependencies
         webdir = self._webdir()
+        page_exists = os.path.exists(os.path.join(webdir, "home.html"))
+
+        previous_set = set(previous_names) if previous_names is not None else None
+        current_set = set(current_names)
 
         incremental = bool(
-            previous_names is not None
-            and set(previous_names) <= set(current_names)
-            and set(current_names) - set(previous_names)
-            and os.path.exists(os.path.join(webdir, "home.html"))
+            previous_set is not None
+            and previous_set <= current_set
+            and current_set - previous_set
+            and page_exists
         )
+        # Strictly fewer resolved analyses than last time, and nothing new
+        # -- a pure removal, handled by editing the existing metafile
+        # in place rather than recombining everything from scratch.
+        removal_only = bool(
+            previous_set is not None
+            and current_set < previous_set
+            and page_exists
+        )
+
+        if removal_only:
+            return self._submit_subject_analysis_removal(
+                removed=sorted(previous_set - current_set),
+                webdir=webdir,
+                dryrun=dryrun,
+            )
 
         if incremental:
             analyses_to_submit = [
@@ -492,3 +644,136 @@ class PESummary(Pipeline):
         )
 
         return self._submit(command, dryrun)
+
+    def _submit_subject_analysis_removal(self, removed, webdir, dryrun=False):
+        """
+        Drop one or more analyses from an already-published combined page,
+        without recombining the analyses that remain.
+
+        Called from ``_submit_subject_analysis`` when a refresh finds the
+        resolved source analyses have only shrunk since the last
+        successful run (nothing new, one or more gone). Runs
+        ``summarymodify --remove_label`` against the existing metafile to
+        strip the removed analyses' data out of it directly, then re-runs
+        ``summarypages`` against that trimmed metafile so the published
+        pages/plots no longer reference them. Neither step re-samples or
+        recombines the analyses that remain -- a pesummary metafile
+        carries its own stored labels, and ``summarypages`` uses those
+        (ignoring/warning on any ``--labels`` passed alongside a metafile
+        input), so the surviving analyses are picked up automatically once
+        the removed ones are gone from the file.
+
+        ``resolved_dependencies`` isn't shrunk to the surviving set until
+        ``detect_completion()`` confirms the chain actually finished (see
+        ``_submit_chain``'s ``completion_marker``): core's
+        ``detect_completion_processing()`` only checks that *expected*
+        labels are present, not that removed ones are gone, so the
+        untouched, pre-removal metafile would otherwise already satisfy
+        "surviving labels present" -- making the production look complete
+        before the job has even run.
+        """
+        metafile = self.results()["metafile"]
+        if not os.path.exists(metafile):
+            raise PipelineException(
+                f"PESummary subject analysis {self.production.name}: cannot "
+                f"remove {', '.join(removed)} -- no existing metafile found "
+                f"at {metafile}."
+            )
+
+        modify_command = [
+            "--samples", metafile,
+            "--webdir", webdir,
+            "--remove_label", *removed,
+            "--overwrite",
+        ]
+        regenerate_command = ["--webdir", webdir, "--samples", metafile, "--gw"]
+        self._append_shared_options(regenerate_command)
+
+        surviving = sorted(set(self.production.resolved_dependencies) - set(removed))
+
+        cluster_id = self._submit_chain(
+            [
+                (self.modify_executable, modify_command),
+                (self.executable, regenerate_command),
+            ],
+            dryrun,
+            completion_marker=self._chain_completion_marker(),
+        )
+
+        self.production.meta["pesummary_pending_chain_labels"] = surviving
+
+        return cluster_id
+
+    def rename_analysis(self, old_label, new_label, dryrun=False):
+        """
+        Rename a stored analysis in this subject analysis's published
+        metafile, without re-running or recombining anything.
+
+        This is not wired into the automatic refresh cycle: given only a
+        before/after diff of resolved dependency names, asimov can't tell
+        "an analysis was renamed" apart from "one was removed and an
+        unrelated one was added". Call this directly -- e.g. from a
+        one-off script -- when a production has been renamed in the
+        ledger and its already-computed results should carry over under
+        the new name rather than triggering a full re-run.
+
+        Parameters
+        ----------
+        old_label : str
+            The analysis's current stored label.
+        new_label : str
+            The label to rename it to.
+        dryrun : bool, optional
+            If True, print the commands that would be run rather than
+            submitting them.
+        """
+        if not self.is_subject_analysis:
+            raise PipelineException(
+                "rename_analysis() only applies to PESummary SubjectAnalysis "
+                "productions."
+            )
+
+        webdir = self._webdir()
+        metafile = self.results()["metafile"]
+        if not os.path.exists(metafile):
+            raise PipelineException(
+                f"PESummary subject analysis {self.production.name}: cannot "
+                f"rename '{old_label}' -- no existing metafile found at "
+                f"{metafile}."
+            )
+
+        modify_command = [
+            "--samples", metafile,
+            "--webdir", webdir,
+            "--labels", f"{old_label}:{new_label}",
+            "--overwrite",
+        ]
+        regenerate_command = ["--webdir", webdir, "--samples", metafile, "--gw"]
+        self._append_shared_options(regenerate_command)
+
+        target_resolved = None
+        if self.production.resolved_dependencies is not None:
+            target_resolved = sorted(
+                new_label if name == old_label else name
+                for name in self.production.resolved_dependencies
+            )
+
+        cluster_id = self._submit_chain(
+            [
+                (self.modify_executable, modify_command),
+                (self.executable, regenerate_command),
+            ],
+            dryrun,
+            completion_marker=self._chain_completion_marker(),
+        )
+
+        # As in _submit_subject_analysis_removal: deferred until
+        # detect_completion() sees the chain's own completion marker,
+        # rather than applied immediately -- otherwise a chain that fails
+        # after summarymodify's rename has landed, but before summarypages
+        # finishes regenerating the pages, would still look complete (the
+        # renamed label is already present in the metafile either way).
+        if target_resolved is not None:
+            self.production.meta["pesummary_pending_chain_labels"] = target_resolved
+
+        return cluster_id
