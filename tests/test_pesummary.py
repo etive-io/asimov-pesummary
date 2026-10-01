@@ -637,6 +637,19 @@ class TestPESummarySubmitDagCommand(unittest.TestCase):
     def test_skymap_samples_flag_absent_when_not_in_meta(self):
         self.assertFalse(self._has("--nsamples_for_skymap"))
 
+    # --- Optional: no ligo skymap ---
+
+    def test_no_ligo_skymap_flag_present_when_set(self):
+        prod = make_production(pesummary_meta={"no ligo skymap": True})
+        self.assertTrue(self._has("--no_ligo_skymap", prod))
+
+    def test_no_ligo_skymap_flag_absent_when_false(self):
+        prod = make_production(pesummary_meta={"no ligo skymap": False})
+        self.assertFalse(self._has("--no_ligo_skymap", prod))
+
+    def test_no_ligo_skymap_flag_absent_when_not_in_meta(self):
+        self.assertFalse(self._has("--no_ligo_skymap"))
+
     # --- Optional: evolve spins ---
 
     def test_evolve_spins_forwards_flag_present(self):
