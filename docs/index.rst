@@ -42,6 +42,7 @@ Asimov ledger.  All keys are optional unless noted.
        cosmology: Planck15_lal
        redshift: exact
        skymap samples: 2000
+       no ligo skymap: true     # pass --no_ligo_skymap (see note below)
        evolve spins: forwards   # "forwards", "backwards", or "forwards backwards"
        calculate:
          - precessing snr
@@ -50,6 +51,13 @@ Asimov ledger.  All keys are optional unless noted.
          - redshift
          - mass_1_source
          - mass_2_source
+
+.. note::
+
+   ``no ligo skymap: true`` skips the ``ligo.skymap`` plot. Use it when every
+   posterior sample has the same sky position (for example simple-pe's output):
+   ``ligo.skymap``'s KDE clustering never terminates on identical points, so
+   ``summarypages`` writes all of its pages and then runs indefinitely.
 
 Subject analyses
 -----------------

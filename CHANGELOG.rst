@@ -1,3 +1,12 @@
+Unreleased
+==========
+
+**``no ligo skymap`` option**
+  Setting ``no ligo skymap: true`` in ``postprocessing.pesummary`` passes ``--no_ligo_skymap`` to
+  ``summarypages``. ``ligo.skymap``'s KDE clustering never terminates when every posterior sample has
+  the same sky position (as simple-pe produces), which left ``summarypages`` running indefinitely
+  after writing its pages.
+
 0.2.0
 =====
 
