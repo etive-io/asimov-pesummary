@@ -15,7 +15,7 @@ jobs:
     name: "PESummary end-to-end test (HTCondor)"
     runs-on: ubuntu-latest
     container:
-      image: htcondor/mini:latest
+      image: htcondor/mini:25.13.2-el9
       options: --privileged
     defaults:
       run:
@@ -228,9 +228,9 @@ jobs:
             expected = {'fake-pe', 'fake-pe-2'}
             assert expected <= groups, f'expected {expected} in {groups}'
             "
-            if grep -q -- '--add_to_existing' working/FAKE_PE_TEST_EVENT/pesummary.sh; then
+            if grep -q -- '--add_to_existing' working/FAKE_PE_TEST_EVENT/pesummary-subject/pesummary.sh; then
               echo "::error::Initial PESummary SubjectAnalysis combine unexpectedly used --add_to_existing"
-              cat working/FAKE_PE_TEST_EVENT/pesummary.sh
+              cat working/FAKE_PE_TEST_EVENT/pesummary-subject/pesummary.sh
               exit 1
             fi
 
@@ -283,9 +283,9 @@ jobs:
         with:
           script: |
             cd e2e_project
-            if ! grep -q -- '--add_to_existing' working/FAKE_PE_TEST_EVENT/pesummary.sh; then
+            if ! grep -q -- '--add_to_existing' working/FAKE_PE_TEST_EVENT/pesummary-subject/pesummary.sh; then
               echo "::error::Expected the PESummary SubjectAnalysis refresh to use --add_to_existing (incremental); a full rebuild happened instead"
-              cat working/FAKE_PE_TEST_EVENT/pesummary.sh
+              cat working/FAKE_PE_TEST_EVENT/pesummary-subject/pesummary.sh
               exit 1
             fi
 
