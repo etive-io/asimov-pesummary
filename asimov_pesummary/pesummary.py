@@ -441,10 +441,63 @@ class PESummary(Pipeline):
         merged.update(self.production.meta.get(key, {}) or {})
         return merged
 
+    def _upstream_asset(self, production, key):
+        """
+        Find a ``key`` asset (e.g. ``"psds"``, ``"calibration"``) in the
+        analyses ``production`` depends on, working back through their own
+        dependencies.
+
+        An analysis such as bilby advertises only its samples and config; its
+        PSDs and calibration envelopes belong to the analyses it was built from
+        (``generate-psd`` and so on). The nearest upstream analysis which
+        provides a non-empty value is used, and later ``needs`` entries take
+        precedence, as when assets are merged.
+        """
+        seen = set()
+
+        def search(current):
+            by_name = {p.name: p for p in current.event.productions}
+            for name in reversed(list(current.dependencies or [])):
+                upstream = by_name.get(name)
+                if upstream is None or name in seen:
+                    continue
+                seen.add(name)
+                value = upstream.pipeline.collect_assets().get(key)
+                if value:
+                    return value
+                value = search(upstream)
+                if value:
+                    return value
+            return {}
+
+        return search(production)
+
+    def _config_path(self):
+        """
+        Path of the config file to give ``summarypages``.
+
+        A single-analysis job summarises an upstream analysis, so it is that
+        analysis's config which describes the run (as for each source analysis
+        of a subject analysis). Where there are several upstream analyses the
+        last one with a config is used, matching how their assets are merged
+        (later ones take precedence). Only if there is none is this
+        production's own config used.
+        """
+        repository = self.production.event.repository
+        productions = list(self.production.event.productions)
+        for name in reversed(list(self.production.dependencies or [])):
+            for upstream in productions:
+                if upstream.name != name:
+                    continue
+                found = repository.find_prods(upstream.name, upstream.category)
+                if found:
+                    return os.path.join(
+                        repository.directory, upstream.category, found[0]
+                    )
+        configfile = repository.find_prods(self.production.name, self.category)[0]
+        return os.path.join(repository.directory, self.category, configfile)
+
     def _submit_single_analysis(self, dryrun=False):
-        configfile = self.production.event.repository.find_prods(
-            self.production.name, self.category
-        )[0]
         label = str(self.production.name)
 
         waveform = self._inherited_meta("waveform")
@@ -480,12 +533,7 @@ class PESummary(Pipeline):
             command += ["--NRSur_fits"]
 
         # Config file
-        command += [
-            "--config",
-            os.path.join(
-                self.production.event.repository.directory, self.category, configfile
-            ),
-        ]
+        command += ["--config", self._config_path()]
         # Samples
         sample_path = self._single_sample_path(
             self.production._previous_assets().get("samples")
@@ -498,9 +546,12 @@ class PESummary(Pipeline):
         command += ["--samples", sample_path]
 
         # PSDs
+        assets = self.production._previous_assets()
         psds = {
             ifo: os.path.abspath(psd)
-            for ifo, psd in self.production._previous_assets().get("psds", {}).items()
+            for ifo, psd in (
+                assets.get("psds") or self._upstream_asset(self.production, "psds")
+            ).items()
         }
         if len(psds) > 0:
             command += ["--psds"]
@@ -509,10 +560,11 @@ class PESummary(Pipeline):
 
         # Calibration envelopes
         cals = {
-            ifo: os.path.abspath(psd)
-            for ifo, psd in self.production._previous_assets()
-            .get("calibration", {})
-            .items()
+            ifo: os.path.abspath(cal)
+            for ifo, cal in (
+                assets.get("calibration")
+                or self._upstream_asset(self.production, "calibration")
+            ).items()
         }
         if len(cals) > 0:
             command += ["--calibration"]
@@ -622,12 +674,17 @@ class PESummary(Pipeline):
             if not psds:
                 psds = {
                     ifo: os.path.abspath(psd)
-                    for ifo, psd in assets.get("psds", {}).items()
+                    for ifo, psd in (
+                        assets.get("psds") or self._upstream_asset(analysis, "psds")
+                    ).items()
                 }
             if not cals:
                 cals = {
                     ifo: os.path.abspath(cal)
-                    for ifo, cal in assets.get("calibration", {}).items()
+                    for ifo, cal in (
+                        assets.get("calibration")
+                        or self._upstream_asset(analysis, "calibration")
+                    ).items()
                 }
 
         if not labels:

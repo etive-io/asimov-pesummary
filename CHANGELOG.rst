@@ -4,6 +4,16 @@ Unreleased
 Bug Fixes
 ---------
 
+**Config file, PSDs and calibration envelopes come from the analysis being summarised**
+  A single-analysis job passed ``summarypages`` its own generated config file, not the one
+  of the analysis in ``needs``, and its PSDs and calibration envelopes were only those
+  advertised by that analysis directly. Pipelines such as bilby advertise just their
+  samples and config, so no ``--psds`` or ``--calibration`` was passed at all. The config
+  is now the upstream analysis's (as for each source analysis of a subject analysis), and
+  PSDs and calibration envelopes are looked up through the upstream analysis's own
+  ``needs`` (for example ``generate-psd``) when it doesn't provide them, for single and
+  subject analyses alike.
+
 **Job files written to the production's run directory**
   The job script and HTCondor ``output``/``error``/``log`` files were written to the
   event's working directory, so two PESummary productions of one event (for example a
