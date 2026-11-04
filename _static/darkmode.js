@@ -7,9 +7,8 @@
 (() => {
   'use strict'
 
-  const storedTheme = localStorage.getItem('theme')
-
   const getPreferredTheme = () => {
+    const storedTheme = localStorage.getItem('theme')
     if (storedTheme) {
       return storedTheme
     }
@@ -30,6 +29,7 @@
   const showActiveTheme = theme => {
     const activeThemeIcon = document.querySelector('.theme-icon-active use')
     const btnToActive = document.querySelector(`[data-bs-theme-value="${theme}"]`)
+    if (!activeThemeIcon || !btnToActive) return
     const svgOfActiveBtn = btnToActive.querySelector('svg use').getAttribute('href')
 
     document.querySelectorAll('[data-bs-theme-value]').forEach(element => {
@@ -41,7 +41,8 @@
   }
 
   window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
-    if (storedTheme !== 'light' || storedTheme !== 'dark') {
+    const currentTheme = localStorage.getItem('theme')
+    if (currentTheme !== 'light' && currentTheme !== 'dark') {
       setTheme(getPreferredTheme())
     }
   })

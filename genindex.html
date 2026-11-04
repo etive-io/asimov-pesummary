@@ -6,7 +6,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Index &#8212; asimov-pesummary 0.1.0.dev1 documentation</title>
     <link rel="stylesheet" type="text/css" href="_static/pygments.css?v=a5519fdd" />
-    <link rel="stylesheet" type="text/css" href="_static/basic.css?v=29da98fa" />
+    <link rel="stylesheet" type="text/css" href="_static/kentigern-modern.css?v=2e3f893d" />
     <script src="_static/documentation_options.js?v=32272829"></script>
     <script src="_static/doctools.js?v=fd6eb6e6"></script>
     <script src="_static/sphinx_highlight.js?v=6ffebe34"></script>
@@ -14,15 +14,39 @@
     <link rel="search" title="Search" href="search.html" />
 <meta charset='utf-8'>
 
-<meta http-equiv='X-UA-Compatible' content='IE=edge,chrome=1'>
-<meta name='viewport' content='width=device-width, initial-scale=1.0, maximum-scale=1'>
-<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name='viewport' content='width=device-width, initial-scale=1.0'>
 <script src="_static/darkmode.js"></script>
-<script src="https://ajax.googleapis.com/ajax/libs/jquery/3.7.1/jquery.min.js"></script>
 <script src="_static/kentigern.js"></script>
+<!-- <script src="_static/node_modules/@popperjs/core/dist/umd/popper.min.js"></script> -->
+<!-- <script src="_static/node_modules/bootstrap/dist/js/bootstrap.min.js"></script> -->
 
   </head>
-  <body data-spy="scroll" data-target="#localtoc" data-offset="100">
+  <body>
+
+<a class="skip-nav" href="#main-content">Skip to main content</a>
+
+<!-- Global TOC offcanvas — used on mobile/tablet (<xl) -->
+<div class="offcanvas offcanvas-start" tabindex="-1"
+     id="globalTocOffcanvas"
+     aria-labelledby="globalTocOffcanvasLabel">
+  <div class="offcanvas-header">
+    <h5 class="offcanvas-title" id="globalTocOffcanvasLabel">Contents</h5>
+    <button type="button" class="btn-close" data-bs-dismiss="offcanvas"
+            aria-label="Close"></button>
+  </div>
+  <div class="offcanvas-body">
+    <div id="globaltoc-wrapper" class="pt-3">
+
+<p class="caption" role="heading"><span class="caption-text">Reference</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="api.html">API Reference</a></li>
+</ul>
+
+
+</div>
+
+  </div>
+</div>
 
 <nav class="navbar navbar-expand-lg navbar-dark kentigern-navbar kentigern-main-navbar">
   <div class="container-fluid">
@@ -30,11 +54,20 @@
     <a class="navbar-brand" href="index.html">
       asimov-pesummary</a>
     <!-- End navbar brand -->
+    <!-- Contents button — opens global TOC offcanvas on mobile/tablet -->
+    <button class="btn btn-sm btn-outline-light me-2 d-xl-none"
+	    type="button"
+	    data-bs-toggle="offcanvas"
+	    data-bs-target="#globalTocOffcanvas"
+	    aria-controls="globalTocOffcanvas"
+	    aria-label="Open table of contents">
+      <i class="bi bi-list-ul"></i> Contents
+    </button>
     <!-- Navbar toggler -->
     <button class="navbar-toggler"
 	    type="button"
-	    data-toggle="collapse"
-	    data-target="#navbarSupportedContent"
+	    data-bs-toggle="collapse"
+	    data-bs-target="#navbarSupportedContent"
 	    aria-controls="navbarSupportedContent"
 	    aria-expanded="false"
 	    aria-label="Toggle navigation">
@@ -147,6 +180,7 @@
   <button class="btn btn-link nav-link py-2 px-0 px-lg-2 dropdown-toggle d-flex align-items-center"
           id="bd-theme"
           type="button"
+          aria-label="Toggle colour theme"
           aria-expanded="false"
           data-bs-toggle="dropdown"
           data-bs-display="static">
@@ -200,17 +234,10 @@
 
 
 <div class="container-fluid" id="docs-container">
-  
+
   <div class="row justify-content-center">
-    <div class="col-md-6 col-lg-2 order-3 order-xl-1 toc-left">
-      <!-- 
-<form action="search.html" method="get">
- <div class="form-group">
-  <input type="text" name="q" class="form-control" placeholder="Search" />
- </div>
-  <input type="hidden" name="check_keywords" value="yes" />
-  <input type="hidden" name="area" value="default" />
-</form> -->
+
+    <div class="d-none d-xl-block col-xl-2 toc-left">
       <div id="globaltoc-wrapper" class="pt-3">
 
 <p class="caption" role="heading"><span class="caption-text">Reference</span></p>
@@ -224,22 +251,11 @@
       
     </div>
 
-    <div class="col-md-6 col-lg-2 order-2 order-xl-3 toc-right">
-      <div id="localtoc-wrapper">
-  
-  <div id="localtoc">
-    
-  </div>
-
-</div>
-      
-    </div>
-    
-    <div class="col-md-12 col-lg-8 content order-1 order-xl-2 col-xl-6 pt-3">
+    <div class="col-12 col-lg-9 col-xl-8 content pt-3" id="main-content">
 
       
       
-      
+
       
 
 <h1 id="index">Index</h1>
@@ -313,6 +329,17 @@
 
     </div>
 
+    <div class="d-none d-lg-block col-lg-3 col-xl-2 toc-right">
+      <div id="localtoc-wrapper">
+  
+  <div id="localtoc">
+    
+  </div>
+
+</div>
+      
+    </div>
+
   </div>
   <div class="container">
 <footer class="footer d-flex flex-wrap justify-content-between align-items-center py-3 my-4 border-top">  
@@ -321,16 +348,10 @@
       <!-- <a href="#">Back to top</a> -->
       
       &copy; Copyright 2026, Daniel Williams.<br/>
-      Created using <a href="http://sphinx-doc.org/">Sphinx</a> 9.1.0.<br/>
+      Created using <a href="http://sphinx-doc.org/">Sphinx</a> 9.1.1.<br/>
     </p>
   </div> 
 </footer>
 </div>
-    <script>
-    $(document).ready(function(){
-	$("#localtoc a").addClass("nav-link")
-	$('body').scrollspy({ target: '#localtoc' })
-    });
-  </script>
   </body>
 </html>
