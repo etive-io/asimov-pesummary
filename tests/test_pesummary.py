@@ -581,6 +581,119 @@ class TestPESummarySubmitDagCommand(unittest.TestCase):
         with self.assertRaises(PipelineException):
             self._run(production)
 
+    # --- Config inherited from the upstream analysis ---
+
+    def _production_with_upstream(self, upstream_approximant="IMRPhenomXP_NRTidalv3"):
+        """A production that sets no waveform/likelihood meta of its own but
+        ``needs`` an upstream analysis which does."""
+        production = make_production()
+        production.meta.pop("waveform")
+        production.meta.pop("likelihood")
+        upstream = make_dependency("Bilby1", approximant=upstream_approximant,
+                                   min_freq={"H1": 25, "L1": 30})
+        production.dependencies = ["Bilby1"]
+        production.event.productions = [production, upstream]
+        # Config files are looked up by analysis name in the shared repository.
+        production.event.repository.find_prods.side_effect = (
+            lambda name, category: [f"{category}/{name}.ini"]
+        )
+        return production
+
+    def test_waveform_inherited_from_upstream_analysis(self):
+        production = self._production_with_upstream()
+        self.assertEqual(self._value("--approximant", production),
+                         "IMRPhenomXP_NRTidalv3")
+        self.assertEqual(self._value("--f_ref", production), "20")
+
+    def test_minimum_frequency_inherited_from_upstream_analysis(self):
+        production = self._production_with_upstream()
+        self.assertEqual(self._value("--f_low", production), "25")
+
+    def test_own_waveform_meta_overrides_upstream(self):
+        production = self._production_with_upstream()
+        production.meta["waveform"] = {"approximant": "SEOBNRv5PHM"}
+        self.assertEqual(self._value("--approximant", production), "SEOBNRv5PHM")
+        # Entries it doesn't set itself still come from upstream.
+        self.assertEqual(self._value("--f_ref", production), "20")
+
+    def test_config_taken_from_upstream_analysis(self):
+        production = self._production_with_upstream()
+        self.assertEqual(
+            self._value("--config", production),
+            "/repo/GW150914/C01_offline/C01_offline/Bilby1.ini",
+        )
+
+    def test_config_from_last_upstream_analysis_with_one(self):
+        production = self._production_with_upstream()
+        production.dependencies = ["Bilby1", "Bilby2"]
+        production.event.productions.append(make_dependency("Bilby2"))
+        self.assertTrue(self._value("--config", production).endswith("Bilby2.ini"))
+
+    def test_config_skips_upstream_analysis_without_one(self):
+        production = self._production_with_upstream()
+        production.dependencies = ["Bilby1", "Bilby2"]
+        production.event.productions.append(make_dependency("Bilby2"))
+        production.event.repository.find_prods.side_effect = (
+            lambda name, category: [f"{category}/{name}.ini"] if name == "Bilby1" else []
+        )
+        self.assertTrue(self._value("--config", production).endswith("Bilby1.ini"))
+
+    def test_config_falls_back_to_own_when_no_upstream(self):
+        self.assertTrue(self._value("--config").endswith("Prod0.ini"))
+
+    def _with_psd_analysis(self, production, key="psds",
+                           value=None):
+        """Chain Bilby1 -> Psd0, where only Psd0 advertises ``key``, as for
+        bilby (samples and config only) built from generate-psd."""
+        value = value or {"H1": "/path/psd_H1.dat", "L1": "/path/psd_L1.dat"}
+        upstream = production.event.productions[1]
+        upstream.dependencies = ["Psd0"]
+        psd = make_dependency("Psd0")
+        psd.dependencies = []
+        psd.pipeline.collect_assets.return_value = {key: value}
+        upstream.pipeline.collect_assets.return_value = {"samples": "/path/s.h5"}
+        production.event.productions.append(psd)
+        # Real analyses of one event share the event; the mocks don't.
+        upstream.event.productions = production.event.productions
+        production._previous_assets.return_value = {"samples": "/path/s.h5"}
+
+    def test_psds_found_further_up_the_chain(self):
+        production = self._production_with_upstream()
+        self._with_psd_analysis(production)
+        self.assertTrue(self._has("--psds", production))
+        parts = self._parts(production)
+        self.assertIn("H1:/path/psd_H1.dat", parts)
+        self.assertIn("L1:/path/psd_L1.dat", parts)
+
+    def test_calibration_found_further_up_the_chain(self):
+        production = self._production_with_upstream()
+        self._with_psd_analysis(
+            production, key="calibration", value={"H1": "/path/cal_H1.txt"}
+        )
+        self.assertIn("H1:/path/cal_H1.txt", self._parts(production))
+
+    def test_direct_psds_take_precedence_over_further_up(self):
+        production = self._production_with_upstream()
+        self._with_psd_analysis(production)
+        production._previous_assets.return_value = {
+            "samples": "/path/s.h5", "psds": {"H1": "/path/direct_H1.dat"}
+        }
+        parts = self._parts(production)
+        self.assertIn("H1:/path/direct_H1.dat", parts)
+        self.assertNotIn("H1:/path/psd_H1.dat", parts)
+
+    def test_no_psds_anywhere_omits_flag(self):
+        production = self._production_with_upstream()
+        production._previous_assets.return_value = {"samples": "/path/s.h5"}
+        production.event.productions[1].pipeline.collect_assets.return_value = {}
+        self.assertFalse(self._has("--psds", production))
+
+    def test_missing_everywhere_still_raises(self):
+        production = self._production_with_upstream()
+        production.event.productions[1].meta = {}
+        with self.assertRaises(PipelineException):
+            self._run(production)
+
     # --- Multiprocess ---
 
     def test_multiprocess_flag_present(self):
@@ -806,6 +919,34 @@ class TestPESummaryBashFile(unittest.TestCase):
             self.production.event.work_dir
         )
 
+    def test_bash_file_written_in_production_rundir_when_set(self):
+        self.production.rundir = "/working/GW150914/Prod0/rundir"
+        with patch("asimov_pesummary.pesummary.os.makedirs") as makedirs:
+            self.pipeline.submit_dag(dryrun=True)
+        makedirs.assert_called_with("/working/GW150914/Prod0/rundir", exist_ok=True)
+        self.mock_utils.set_directory.assert_called_with(
+            "/working/GW150914/Prod0/rundir"
+        )
+
+    def test_condor_files_written_in_production_rundir_when_set(self):
+        self.production.rundir = "/working/GW150914/Prod0/rundir"
+        with patch("asimov_pesummary.pesummary.os.makedirs"):
+            description = self.pipeline._submit_description()
+        for key, name in (("output", "out"), ("error", "err"), ("log", "log")):
+            self.assertEqual(
+                description[key], f"/working/GW150914/Prod0/rundir/pesummary.{name}"
+            )
+
+    def test_productions_of_one_event_get_separate_job_files(self):
+        other = make_production()
+        other.name = "Prod1"
+        other.rundir = "/working/GW150914/Prod1"
+        self.production.rundir = "/working/GW150914/Prod0"
+        with patch("asimov_pesummary.pesummary.os.makedirs"):
+            first = PESummary(self.production)._submit_description()
+            second = PESummary(other)._submit_description()
+        self.assertNotEqual(first["log"], second["log"])
+
 
 # ---------------------------------------------------------------------------
 # TestPESummaryHTCondorSubmit
@@ -962,6 +1103,21 @@ class TestPESummarySubjectAnalysis(unittest.TestCase):
         """Return the `count` tokens immediately following `flag`."""
         i = parts.index(flag)
         return parts[i + 1:i + 1 + count]
+
+    def test_psds_found_further_up_the_chain_of_a_source_analysis(self):
+        """bilby advertises only samples and config; its PSDs come from the
+        analysis it was built from."""
+        bilby = make_dependency("Bilby1", psds={})
+        psd = make_dependency("Psd0")
+        psd.dependencies = []
+        psd.pipeline.collect_assets.return_value = {
+            "psds": {"H1": "/path/psd_H1.dat"}
+        }
+        bilby.dependencies = ["Psd0"]
+        bilby.event.productions = [bilby, psd]
+        parts = self._parts(make_subject_analysis(analyses=[bilby]))
+        self.assertTrue(self._has("--psds", parts))
+        self.assertIn("H1:/path/psd_H1.dat", parts)
 
     # --- Validation ---
 
