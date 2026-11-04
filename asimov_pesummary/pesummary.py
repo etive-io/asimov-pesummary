@@ -219,6 +219,12 @@ class PESummary(Pipeline):
         if "skymap samples" in self.meta:
             command += ["--nsamples_for_skymap", str(self.meta["skymap samples"])]
 
+        if self.meta.get("no ligo skymap"):
+            # ligo.skymap's KDE clustering never terminates when every
+            # posterior sample has the same sky position (as e.g. simple-pe
+            # produces), so summarypages runs forever after writing its pages.
+            command += ["--no_ligo_skymap"]
+
         if "evolve spins" in self.meta:
             if "forwards" in self.meta["evolve spins"]:
                 command += ["--evolve_spins_fowards", "True"]
