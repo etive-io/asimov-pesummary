@@ -581,6 +581,43 @@ class TestPESummarySubmitDagCommand(unittest.TestCase):
         with self.assertRaises(PipelineException):
             self._run(production)
 
+    # --- Config inherited from the upstream analysis ---
+
+    def _production_with_upstream(self, upstream_approximant="IMRPhenomXP_NRTidalv3"):
+        """A production that sets no waveform/likelihood meta of its own but
+        ``needs`` an upstream analysis which does."""
+        production = make_production()
+        production.meta.pop("waveform")
+        production.meta.pop("likelihood")
+        upstream = make_dependency("Bilby1", approximant=upstream_approximant,
+                                   min_freq={"H1": 25, "L1": 30})
+        production.dependencies = ["Bilby1"]
+        production.event.productions = [production, upstream]
+        return production
+
+    def test_waveform_inherited_from_upstream_analysis(self):
+        production = self._production_with_upstream()
+        self.assertEqual(self._value("--approximant", production),
+                         "IMRPhenomXP_NRTidalv3")
+        self.assertEqual(self._value("--f_ref", production), "20")
+
+    def test_minimum_frequency_inherited_from_upstream_analysis(self):
+        production = self._production_with_upstream()
+        self.assertEqual(self._value("--f_low", production), "25")
+
+    def test_own_waveform_meta_overrides_upstream(self):
+        production = self._production_with_upstream()
+        production.meta["waveform"] = {"approximant": "SEOBNRv5PHM"}
+        self.assertEqual(self._value("--approximant", production), "SEOBNRv5PHM")
+        # Entries it doesn't set itself still come from upstream.
+        self.assertEqual(self._value("--f_ref", production), "20")
+
+    def test_missing_everywhere_still_raises(self):
+        production = self._production_with_upstream()
+        production.event.productions[1].meta = {}
+        with self.assertRaises(PipelineException):
+            self._run(production)
+
     # --- Multiprocess ---
 
     def test_multiprocess_flag_present(self):
@@ -805,6 +842,34 @@ class TestPESummaryBashFile(unittest.TestCase):
         self.mock_utils.set_directory.assert_called_with(
             self.production.event.work_dir
         )
+
+    def test_bash_file_written_in_production_rundir_when_set(self):
+        self.production.rundir = "/working/GW150914/Prod0/rundir"
+        with patch("asimov_pesummary.pesummary.os.makedirs") as makedirs:
+            self.pipeline.submit_dag(dryrun=True)
+        makedirs.assert_called_with("/working/GW150914/Prod0/rundir", exist_ok=True)
+        self.mock_utils.set_directory.assert_called_with(
+            "/working/GW150914/Prod0/rundir"
+        )
+
+    def test_condor_files_written_in_production_rundir_when_set(self):
+        self.production.rundir = "/working/GW150914/Prod0/rundir"
+        with patch("asimov_pesummary.pesummary.os.makedirs"):
+            description = self.pipeline._submit_description()
+        for key, name in (("output", "out"), ("error", "err"), ("log", "log")):
+            self.assertEqual(
+                description[key], f"/working/GW150914/Prod0/rundir/pesummary.{name}"
+            )
+
+    def test_productions_of_one_event_get_separate_job_files(self):
+        other = make_production()
+        other.name = "Prod1"
+        other.rundir = "/working/GW150914/Prod1"
+        self.production.rundir = "/working/GW150914/Prod0"
+        with patch("asimov_pesummary.pesummary.os.makedirs"):
+            first = PESummary(self.production)._submit_description()
+            second = PESummary(other)._submit_description()
+        self.assertNotEqual(first["log"], second["log"])
 
 
 # ---------------------------------------------------------------------------

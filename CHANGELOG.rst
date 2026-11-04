@@ -1,3 +1,24 @@
+Unreleased
+==========
+
+Bug Fixes
+---------
+
+**Job files written to the production's run directory**
+  The job script and HTCondor ``output``/``error``/``log`` files were written to the
+  event's working directory, so two PESummary productions of one event (for example a
+  per-analysis page and a combined page) overwrote each other's ``pesummary.sh`` and logs.
+  They now go in the production's own run directory, which is created if needed. A
+  production with no run directory still uses the event's working directory.
+
+**Single-analysis jobs inherit waveform configuration from ``needs``**
+  A single-analysis ``PESummary`` production previously required ``waveform``
+  (approximant / reference frequency) and ``likelihood`` (minimum frequency) to be set on
+  the PESummary production itself, and failed with a ``PipelineException`` otherwise, even
+  though the upstream analysis it summarises already defines them. Missing entries are now
+  filled in from the analyses listed in ``needs``; values set on the PESummary production
+  still take precedence.
+
 0.2.0
 =====
 

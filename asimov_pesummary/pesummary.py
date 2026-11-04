@@ -241,6 +241,23 @@ class PESummary(Pipeline):
             if "precessing snr" in self.meta["calculate"]:
                 command += ["--calculate_precessing_snr"]
 
+    def _rundir(self):
+        """
+        Directory holding this job's script and HTCondor output/error/log
+        files.
+
+        This is the production's own run directory, so that several PESummary
+        productions of one event (e.g. a per-analysis page and a combined
+        page) don't overwrite each other's ``pesummary.sh`` and logs. If the
+        production has no run directory, fall back to the event's working
+        directory, as earlier versions always did.
+        """
+        rundir = getattr(self.production, "rundir", None)
+        if isinstance(rundir, str) and rundir:
+            os.makedirs(rundir, exist_ok=True)
+            return rundir
+        return self.subject.work_dir
+
     def _submit_description(self):
         """
         Build the HTCondor submit description fields shared by every
@@ -250,9 +267,9 @@ class PESummary(Pipeline):
         ``arguments``.
         """
         submit_description = {
-            "output": f"{self.subject.work_dir}/pesummary.out",
-            "error": f"{self.subject.work_dir}/pesummary.err",
-            "log": f"{self.subject.work_dir}/pesummary.log",
+            "output": f"{self._rundir()}/pesummary.out",
+            "error": f"{self._rundir()}/pesummary.err",
+            "log": f"{self._rundir()}/pesummary.log",
             "request_cpus": self.meta["multiprocess"],
             "getenv": "true",
             "batch_name": f"Summary Pages/{self.subject.name}/{self.production.name}",
@@ -272,7 +289,7 @@ class PESummary(Pipeline):
         single ``summarypages`` invocation -- both the single-analysis path
         and the subject-analysis add/full-rebuild paths.
         """
-        with utils.set_directory(self.subject.work_dir):
+        with utils.set_directory(self._rundir()):
             with open("pesummary.sh", "w") as bash_file:
                 bash_file.write(f"{self.executable} " + " ".join(command))
 
@@ -343,7 +360,7 @@ class PESummary(Pipeline):
             lines.append(f"touch {shlex.quote(completion_marker)}")
         script = "\n".join(lines) + "\n"
         script_name = "pesummary.sh"
-        script_path = os.path.join(self.subject.work_dir, script_name)
+        script_path = os.path.join(self._rundir(), script_name)
 
         if completion_marker is not None and not dryrun:
             try:
@@ -351,7 +368,7 @@ class PESummary(Pipeline):
             except FileNotFoundError:
                 pass
 
-        with utils.set_directory(self.subject.work_dir):
+        with utils.set_directory(self._rundir()):
             with open(script_name, "w") as bash_file:
                 bash_file.write(script)
 
@@ -406,20 +423,38 @@ class PESummary(Pipeline):
             return samples[0] if samples else None
         return samples
 
+    def _inherited_meta(self, key):
+        """
+        Return the ``key`` section of this production's metadata, filling any
+        entries it doesn't set itself from the upstream analyses it ``needs``.
+
+        A single-analysis PESummary job summarises one upstream analysis, so
+        settings such as the waveform approximant are normally defined there
+        and should not have to be repeated on the PESummary production. Values
+        set on the production itself take precedence.
+        """
+        merged = {}
+        for name in self.production.dependencies or []:
+            for upstream in self.production.event.productions:
+                if upstream.name == name:
+                    merged.update(upstream.meta.get(key, {}) or {})
+        merged.update(self.production.meta.get(key, {}) or {})
+        return merged
+
     def _submit_single_analysis(self, dryrun=False):
         configfile = self.production.event.repository.find_prods(
             self.production.name, self.category
         )[0]
         label = str(self.production.name)
 
-        waveform = self.production.meta.get("waveform", {})
+        waveform = self._inherited_meta("waveform")
         if not {"approximant", "reference frequency"} <= waveform.keys():
             raise PipelineException(
                 f"PESummary production {self.production.name} is missing "
                 "waveform configuration (approximant / reference frequency) "
                 "required to post-process it."
             )
-        likelihood = self.production.meta.get("likelihood", {})
+        likelihood = self._inherited_meta("likelihood")
         if "minimum frequency" not in likelihood:
             raise PipelineException(
                 f"PESummary production {self.production.name} is missing "
